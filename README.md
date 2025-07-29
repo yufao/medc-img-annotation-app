@@ -2,7 +2,7 @@
 
 一个基于 Web 的医学图像标注系统，支持多角色用户（放射科专家、实习医师、医学生）进行医学图像标注和数据管理。
 
-**📋 重要说明: 本版本已完成重构，移除了数据库依赖，使用Mock数据进行本地测试。**
+**📋 重要说明: 本版本已完成重构，移除了本地测试时的数据库依赖，可使用Mock数据进行本地测试。**
 
 ## 🎯 项目概述
 
@@ -49,7 +49,7 @@ cd frontend
   - 医师: doctor/doctor123
   - 学生: student/student123
 
-## 🏗️ 技术架构（重构后）
+## 🏗️ 技术架构
 
 ### 后端 (Backend)
 - **框架**: Python Flask 3.0+
@@ -65,7 +65,7 @@ cd frontend
 - **路由**: React Router v6
 - **HTTP客户端**: Axios
 
-## 📁 项目结构（重构后）
+## 📁 项目结构
 
 ```
 medc-img-annotation-app/
@@ -120,7 +120,7 @@ medc-img-annotation-app/
 - `POST /api/images/{id}/annotation` - 保存图像标注
 - `GET /api/statistics` - 获取统计信息
 
-## 📝 重构说明
+## 📝 补充说明
 
 ### 主要改进
 1. **移除数据库依赖**: 不再需要MongoDB、Redis等外部服务
@@ -141,19 +141,9 @@ medc-img-annotation-app/
 4. 查看统计信息
 5. 基础的系统导航
 
-## 📞 联系我们
-
-- 项目维护者: [Your Name]
-- 邮箱: your-email@example.com
-
-## 🙏 致谢
-
-感谢所有为本项目做出贡献的开发者和医学专家。
-
----
 
 **注意**: 本系统仅用于教育和研究目的，不得用于临床诊断。
-**重构版本**: 已完成基础功能重构，可进行本地测试和开发。
+
 
 ## 📊 功能特性
 
@@ -305,13 +295,10 @@ npm run build
 
 ## 📞 联系我们
 
-- 项目维护者: [Your Name]
-- 邮箱: your-email@example.com
+- 项目维护者: [yufa]
+- 邮箱: yfaugustin@foxmail.com
 - 项目主页: https://github.com/your-username/medc-img-annotation-app
 
-## 🙏 致谢
-
-感谢所有为本项目做出贡献的开发者和医学专家。
 
 ---
 
