@@ -244,29 +244,33 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
   const fetchImage = async (id) => {
     try {
       if (id) {
-        // 获取指定图片及其标注信息
+        // 获取所有图片及标注信息，找到 image_id === id 的那一张
         const { data } = await api.post('/images_with_annotations', {
           dataset_id: dataset.id,
           expert_id: user,
-          image_id: id
+          role: role,
+          include_all: true
         });
-        if (data.length > 0) {
-          const found = data[0];
+        const found = data.find(img => String(img.image_id) === String(id));
+        if (found) {
           setImg(found);
-          // 如果有标注信息，显示最后的标注结果
           if (found.annotation) {
             setLabel(found.annotation.label !== undefined ? String(found.annotation.label) : '');
             setRemark(found.annotation.tip || '');
           } else {
-            // 如果没有标注信息，清空表单
             setLabel('');
             setRemark('');
           }
-          setImageId(id);
-          // 重置图片查看状态
+          setImageId(found.image_id);
           setImageScale(1);
           setImageOffset({ x: 0, y: 0 });
           setIsImageSelected(false);
+          return;
+        } else {
+          setImg(null);
+          setLabel('');
+          setRemark('');
+          setImageId(null);
           return;
         }
       }
@@ -284,7 +288,6 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
             expert_id: user,
             image_id: data.image_id
           });
-          // 如果这张图片已经有标注了，说明后端逻辑有问题，我们获取所有图片来找未标注的
           if (checkData.data.length > 0 && checkData.data[0].annotation) {
             const allImagesData = await api.post('/images_with_annotations', {
               dataset_id: dataset.id,
@@ -292,7 +295,6 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
               role: role,
               include_all: true
             });
-            // 找到第一个未标注的图片
             const unAnnotatedImage = allImagesData.data.find(img => !img.annotation);
             if (unAnnotatedImage) {
               setImg(unAnnotatedImage);
@@ -300,12 +302,10 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
               setRemark('');
               setImageId(unAnnotatedImage.image_id);
             } else {
-              // 所有图片都已标注完成
               setImg({ completed: true });
               setImageId(null);
             }
           } else {
-            // 正常情况，使用API返回的图片
             setImg({ image_id: data.image_id, filename: data.filename });
             setLabel('');
             setRemark('');
@@ -317,12 +317,10 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
           setRemark('');
           setImageId(data.image_id);
         }
-        // 重置图片查看状态
         setImageScale(1);
         setImageOffset({ x: 0, y: 0 });
         setIsImageSelected(false);
       } else {
-        // 检查是否所有图片都已标注完成
         setImg({ completed: true });
         setImageId(null);
       }
