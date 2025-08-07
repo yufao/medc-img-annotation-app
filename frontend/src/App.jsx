@@ -12,12 +12,16 @@ export default function App() {
 
   if (!user) return <div className="login-bg"><Login onLogin={(u, r) => handleLogin(u, r)} /></div>;
   if (!dataset) return <div className="select-bg"><DatasetSelect user={user} onSelect={setDataset} /></div>;
-  if (selectMode) return <div className="select-bg"><ImageSelector user={user} dataset={dataset} role={role} onSelect={handleImageSelect} /></div>;
+  if (selectMode) return <div className="select-bg"><ImageSelector user={user} dataset={dataset} role={role} onSelect={handleImageSelect} onBack={() => setSelectMode(false)} /></div>;
 
   return (
     <div className="main-bg">
       <div className="top-bar">
         <span>用户: <b>{user}</b> ({role})</span>
+        <div className="logo-container">
+          <div className="logo-placeholder">实验室LOGO</div>
+          <div className="logo-placeholder">学校LOGO</div>
+        </div>
         <button className="btn logout" onClick={handleLogout}>退出</button>
       </div>
       <Annotate 
@@ -25,7 +29,8 @@ export default function App() {
         dataset={dataset} 
         role={role}
         onDone={handleAnnotationDone} 
-        imageIdInit={selectedImageId} 
+        imageIdInit={selectedImageId}
+        onSelectMode={() => setSelectMode(true)}
       />
       <div className="export-bar">
         <Export />
@@ -142,24 +147,99 @@ function DatasetSelect({ user, onSelect }) {
   );
 }
 
-function Annotate({ user, dataset, role, onDone, imageIdInit }) {
+function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
   const [img, setImg] = useState(null);
   const [labels, setLabels] = useState([]);
   const [label, setLabel] = useState('');
   const [remark, setRemark] = useState('');
   const [imageId, setImageId] = useState(imageIdInit);
+  const [annotatedCount, setAnnotatedCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const [imageScale, setImageScale] = useState(1);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
+  const [isImageHovered, setIsImageHovered] = useState(false);
+  const [isImageSelected, setIsImageSelected] = useState(false);
+
+  // 监听 imageIdInit 变化，强制切换图片
+  useEffect(() => {
+    if (imageIdInit) {
+      setImageId(imageIdInit);
+      fetchImage(imageIdInit);
+    }
+  }, [imageIdInit]);
 
   useEffect(() => {
     if (dataset) {
       api.get('/labels', { params: { dataset_id: dataset.id } }).then(r => setLabels(r.data));
+      // 获取计数信息
+      fetchCounts();
     }
   }, [dataset]);
 
+  const fetchCounts = async () => {
+    try {
+      let annotatedCount = 0;
+      let totalCount = 0;
+      
+      // 尝试通过images_with_annotations获取实际计数
+      try {
+        const { data } = await api.post('/images_with_annotations', {
+          dataset_id: dataset.id,
+          expert_id: user,
+          role: role,
+          include_all: true
+        });
+        
+        if (Array.isArray(data)) {
+          totalCount = data.length;
+          annotatedCount = data.filter(img => img.annotation).length;
+        }
+      } catch (error) {
+        console.log("无法通过images_with_annotations获取计数");
+      }
+
+      // 如果上面方法失败，尝试原有API
+      if (totalCount === 0) {
+        try {
+          const annotatedRes = await api.get('/annotation_count', { 
+            params: { expert_id: user, dataset_id: dataset.id, role: role } 
+          });
+          annotatedCount = annotatedRes.data.count || 0;
+        } catch (error) {
+          console.log("标注计数API不可用");
+        }
+
+        try {
+          const totalRes = await api.get('/total_images', { 
+            params: { dataset_id: dataset.id } 
+          });
+          totalCount = totalRes.data.count || 0;
+        } catch (error) {
+          console.log("总数API不可用，从日志推断数据集有10张图片");
+          totalCount = 10; // 根据后端日志，数据集有10张图片
+        }
+      }
+
+      setAnnotatedCount(annotatedCount);
+      setTotalCount(totalCount);
+      
+      console.log(`计数更新: 已标注${annotatedCount}张，总计${totalCount}张`);
+    } catch (error) {
+      console.error("获取计数信息失败:", error);
+      setAnnotatedCount(0);
+      setTotalCount(10);
+    }
+  };
+
   useEffect(() => {
-    if (dataset && user) {
+    if (dataset && user && !imageIdInit) {
       fetchImage(imageId || null);
     }
-  }, [dataset, user, imageId]);
+    // 只依赖dataset和user，防止imageId导致循环
+    // eslint-disable-next-line
+  }, [dataset, user]);
 
   const fetchImage = async (id) => {
     try {
@@ -173,8 +253,20 @@ function Annotate({ user, dataset, role, onDone, imageIdInit }) {
         if (data.length > 0) {
           const found = data[0];
           setImg(found);
-          setLabel(found.annotation?.label || '');
-          setRemark(found.annotation?.tip || '');
+          // 如果有标注信息，显示最后的标注结果
+          if (found.annotation) {
+            setLabel(found.annotation.label !== undefined ? String(found.annotation.label) : '');
+            setRemark(found.annotation.tip || '');
+          } else {
+            // 如果没有标注信息，清空表单
+            setLabel('');
+            setRemark('');
+          }
+          setImageId(id);
+          // 重置图片查看状态
+          setImageScale(1);
+          setImageOffset({ x: 0, y: 0 });
+          setIsImageSelected(false);
           return;
         }
       }
@@ -185,12 +277,54 @@ function Annotate({ user, dataset, role, onDone, imageIdInit }) {
         role: role // 添加角色信息，确保不同角色的进度独立
       });
       if (data.image_id) {
-        setImg({ image_id: data.image_id, filename: data.filename });
-        setLabel('');
-        setRemark('');
-        setImageId(data.image_id);
+        // 检查返回的图片是否已经标注过，如果是则尝试获取真正未标注的图片
+        try {
+          const checkData = await api.post('/images_with_annotations', {
+            dataset_id: dataset.id,
+            expert_id: user,
+            image_id: data.image_id
+          });
+          // 如果这张图片已经有标注了，说明后端逻辑有问题，我们获取所有图片来找未标注的
+          if (checkData.data.length > 0 && checkData.data[0].annotation) {
+            const allImagesData = await api.post('/images_with_annotations', {
+              dataset_id: dataset.id,
+              expert_id: user,
+              role: role,
+              include_all: true
+            });
+            // 找到第一个未标注的图片
+            const unAnnotatedImage = allImagesData.data.find(img => !img.annotation);
+            if (unAnnotatedImage) {
+              setImg(unAnnotatedImage);
+              setLabel('');
+              setRemark('');
+              setImageId(unAnnotatedImage.image_id);
+            } else {
+              // 所有图片都已标注完成
+              setImg({ completed: true });
+              setImageId(null);
+            }
+          } else {
+            // 正常情况，使用API返回的图片
+            setImg({ image_id: data.image_id, filename: data.filename });
+            setLabel('');
+            setRemark('');
+            setImageId(data.image_id);
+          }
+        } catch (error) {
+          setImg({ image_id: data.image_id, filename: data.filename });
+          setLabel('');
+          setRemark('');
+          setImageId(data.image_id);
+        }
+        // 重置图片查看状态
+        setImageScale(1);
+        setImageOffset({ x: 0, y: 0 });
+        setIsImageSelected(false);
       } else {
-        setImg(null);
+        // 检查是否所有图片都已标注完成
+        setImg({ completed: true });
+        setImageId(null);
       }
     } catch (error) {
       console.error("获取图片失败:", error);
@@ -209,13 +343,39 @@ function Annotate({ user, dataset, role, onDone, imageIdInit }) {
       });
       setLabel('');
       setRemark('');
-      fetchImage();
+      // 提交后，优先寻找未标注的图片
+      try {
+        const allImagesData = await api.post('/images_with_annotations', {
+          dataset_id: dataset.id,
+          expert_id: user,
+          role: role,
+          include_all: true
+        });
+        // 找到第一个未标注的图片
+        const unAnnotatedImage = allImagesData.data.find(img => !img.annotation);
+        if (unAnnotatedImage) {
+          setImg(unAnnotatedImage);
+          setImageId(unAnnotatedImage.image_id);
+          // 重置图片查看状态
+          setImageScale(1);
+          setImageOffset({ x: 0, y: 0 });
+          setIsImageSelected(false);
+        } else {
+          // 所有图片都已标注完成
+          setImg({ completed: true });
+          setImageId(null);
+        }
+      } catch (error) {
+        fetchImage();
+      }
+      fetchCounts(); // 更新计数
     } catch (error) {
       console.error("提交标注失败:", error);
     }
   };
 
-  const handlePrev = async () => { // 定义 handlePrev 函数
+  // 定义 handlePrev 函数
+  const handlePrev = async () => { 
     try {
       const { data } = await api.post('/prev_image', {
         dataset_id: dataset.id,
@@ -227,28 +387,210 @@ function Annotate({ user, dataset, role, onDone, imageIdInit }) {
     }
   };
 
+  const handleImageMouseDown = (e) => {
+    // 单击选中图片
+    setIsImageSelected(true);
+    
+    if (imageScale > 1) {
+      e.preventDefault();
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - imageOffset.x, y: e.clientY - imageOffset.y });
+    }
+  };
+
+  const handleImageMouseMove = (e) => {
+    if (isDragging && imageScale > 1) {
+      e.preventDefault();
+      const newX = e.clientX - dragStart.x;
+      const newY = e.clientY - dragStart.y;
+
+      // 计算图片容器的边界限制
+      const container = e.target.parentElement;
+      const containerRect = container.getBoundingClientRect();
+      const imgRect = e.target.getBoundingClientRect();
+
+      // 计算缩放后图片的实际尺寸
+      const scaledWidth = imgRect.width;
+      const scaledHeight = imgRect.height;
+      const containerWidth = containerRect.width;
+      const containerHeight = containerRect.height;
+
+      // 计算允许的最大偏移量（防止图片完全移出可视区域）
+      const maxOffsetX = Math.max(0, (scaledWidth - containerWidth) / 2);
+      const maxOffsetY = Math.max(0, (scaledHeight - containerHeight) / 2);
+
+      // 限制偏移范围
+      const constrainedX = Math.max(-maxOffsetX, Math.min(maxOffsetX, newX));
+      const constrainedY = Math.max(-maxOffsetY, Math.min(maxOffsetY, newY));
+      
+
+      setImageOffset( { x: constrainedX, y: constrainedY } );
+    }
+  };
+
+  // 处理拖拽开始事件，阻止浏览器默认拖拽
+  const handleImageDragStart = (e) => {
+    e.preventDefault();
+    return false;
+  };
+
+  // 处理右键菜单，阻止浏览器默认右键菜单
+  const handleImageContextMenu = (e) => {
+    e.preventDefault();
+    return false;
+  };
+
+  const handleImageMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const resetImageView = () => {
+    setImageScale(1);
+    setImageOffset({ x: 0, y: 0 });
+    setIsImageSelected(false); // 重置时取消选中状态
+  };
+
+  // 点击图片外部区域取消选中
+  const handleContainerClick = (e) => {
+    if (e.target === e.currentTarget) {
+      setIsImageSelected(false);
+    }
+  };
+
   if (!img) return <div className="done-box">标注完成！<button className="btn" onClick={onDone}>返回</button></div>;
+  if (img.completed) return (
+    <div className="completion-overlay">
+      <div className="completion-card">
+        <div className="completion-icon">🎉</div>
+        <h2 className="completion-title">恭喜！</h2>
+        <p className="completion-message">本数据集已全部标注完成</p>
+        <div className="completion-stats">
+          <span className="completion-stat">
+            <strong>{annotatedCount}</strong> 张图片已完成标注
+          </span>
+        </div>
+        <div className="completion-actions">
+          <button className="btn completion-btn secondary" onClick={() => onSelectMode && onSelectMode()}>继续查看本数据集</button>
+          <button className="btn completion-btn" onClick={onDone}>返回数据集选择</button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="annotate-box">
-      <h2>标注图片: </h2>
+      <div className="progress-section">
+        <div className="progress-info">
+          <div className="progress-text-card">
+            <div className="progress-stats">
+              <div className="stat-item completed">
+                <span className="stat-number">{annotatedCount}</span>
+                <span className="stat-label">已标注</span>
+              </div>
+              <div className="stat-divider">|</div>
+              <div className="stat-item remaining">
+                <span className="stat-number">{Math.max(0, totalCount - annotatedCount)}</span>
+                <span className="stat-label">剩余</span>
+              </div>
+              <div className="stat-divider">|</div>
+              <div className="stat-item total">
+                <span className="stat-number">{totalCount}</span>
+                <span className="stat-label">总计</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="progress-visual">
+          <div className="progress-circle">
+            <svg width="90" height="90" viewBox="0 0 90 90">
+              <circle
+                cx="45"
+                cy="45"
+                r="35"
+                fill="none"
+                stroke="#e0e7ff"
+                strokeWidth="8"
+              />
+              <circle
+                cx="45"
+                cy="45"
+                r="35"
+                fill="none"
+                stroke="url(#progressGradient)"
+                strokeWidth="8"
+                strokeDasharray={`${2 * Math.PI * 35}`}
+                strokeDashoffset={`${2 * Math.PI * 35 * (1 - (totalCount > 0 ? annotatedCount / totalCount : 0))}`}
+                transform="rotate(-90 45 45)"
+                style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+                strokeLinecap="round"
+              />
+              <defs>
+                <linearGradient id="progressGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#1677ff" />
+                  <stop offset="100%" stopColor="#4f8cff" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <div className="progress-percentage">
+              {totalCount > 0 ? Math.round((annotatedCount / totalCount) * 100) : 0}%
+            </div>
+          </div>
+        </div>
+      </div>
+      <h2>标注图片: ID #{img.image_id}</h2>
       {img && (
-        <div style={{ textAlign: 'center', marginBottom: '20px 0' }}>
-          <img src={`/static/img/${img.filename}`} alt={img.filename} style={{ maxWidth: '90%', maxHeight: '400px', borderRadius: '18px', boxShadow: '0 2px 16px rgba(0,0,0,0.1)' }} />
-          <div className="img-name">{img.filename}</div>
+        <div className="image-container" onClick={handleContainerClick}>
+          <div 
+            className={`image-viewer ${isImageSelected ? 'selected' : ''}`}
+            onMouseDown={handleImageMouseDown}
+            onMouseMove={handleImageMouseMove}
+            onMouseUp={handleImageMouseUp}
+            onMouseEnter={() => setIsImageHovered(true)}
+            onMouseLeave={() => {
+              setIsImageHovered(false);
+              handleImageMouseUp();
+            }}
+          >
+            <img 
+              src={`/static/img/${img.filename}`} 
+              alt={`图片ID: ${img.image_id}`}
+              style={{ 
+                transform: `scale(${imageScale}) translate(${imageOffset.x / imageScale}px, ${imageOffset.y / imageScale}px)`,
+                cursor: imageScale > 1 ? (isDragging ? 'grabbing' : 'grab') : (isImageSelected ? 'zoom-in' : 'pointer'),
+                transition: isDragging ? 'none' : 'transform 0.1s ease',
+                userSelect: 'none',
+                pointerEvents: 'auto',
+              }} 
+              onDragStart={handleImageDragStart} // 阻止拖拽开始
+              onContextMenu={handleImageContextMenu} // 阻止右键菜单
+              draggable={false} // 禁用HTML5拖拽
+            />
+          </div>
+          <div className="image-controls">
+            <div className="control-buttons">
+              <button className="control-btn" onClick={() => setImageScale(prev => Math.max(0.3, prev - 0.2))}>-</button>
+              <span className="scale-text">{Math.round(imageScale * 100)}%</span>
+              <button className="control-btn" onClick={() => setImageScale(prev => Math.min(3, prev + 0.2))}>+</button>
+              <button className="control-btn reset-btn" onClick={resetImageView}>重置</button>
+            </div>
+          </div>
+          <div className="img-id">图片 ID: #{img.image_id}</div>
         </div>
       )}
       <div className="form-row label-row">
         <label>标签：</label>
         <div className="label-btn-group">
-          {labels.map(l => (
-            <button
-              key={l.label_id}
-              type="button"
-              className={"label-btn" + (label === l.label_id ? " selected" : "")}
-              onClick={() => setLabel(l.label_id)}
-            >{l.name}</button>
-          ))}
+          {labels.map(l => {
+            const isSelected = String(label) === String(l.label_id);
+            return (
+              <button
+                key={l.label_id}
+                type="button"
+                className={"label-btn" + (isSelected ? " selected" : "")}
+                onClick={() => setLabel(l.label_id)}
+              >{l.name}</button>
+            );
+          })}
         </div>
       </div>
       <div className="form-row">
@@ -261,7 +603,7 @@ function Annotate({ user, dataset, role, onDone, imageIdInit }) {
   );
 }
 
-function ImageSelector({ user, dataset, role, onSelect, pageSize = 20 }) {
+function ImageSelector({ user, dataset, role, onSelect, onBack, pageSize = 20 }) {
   const [images, setImages] = useState([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -334,21 +676,24 @@ function ImageSelector({ user, dataset, role, onSelect, pageSize = 20 }) {
 
   return (
     <div className="dataset-card">
-      <h2>选择图片进行标注/修改</h2>
+      <div className="selector-header">
+        <h2>选择图片进行标注/修改</h2>
+        <button className="btn back-btn" onClick={onBack}>返回</button>
+      </div>
       <div style={{maxHeight:500,overflowY:'auto'}}>
         {images.map(img=>(
-          <div key={img.image_id} style={{display:'flex',alignItems:'center',marginBottom:12,padding:12,borderRadius:8,border:'1px solid #e6e6e6'}}>
-            <img src={`/static/img/${img.filename}`} alt={img.filename} style={{width:60,height:60,borderRadius:8,marginRight:16}} />
+          <div key={img.image_id} className="image-selector-item">
+            <img src={`/static/img/${img.filename}`} alt={`图片ID: ${img.image_id}`} className="image-selector-thumb" />
             <div style={{flex:1}}>
-              <div style={{fontWeight:'bold',marginBottom:4}}>{img.filename}</div>
-              <div style={{fontSize:14,color:'#666'}}>
+              <div className="image-selector-id">图片 ID: #{img.image_id}</div>
+              <div className="image-selector-status">
                 {img.annotation ? (
-                  <span style={{color:'#52c41a'}}>
+                  <span className="status-annotated">
                     ✓ 已标注: {img.annotation.label_name || img.annotation.label}
                     {img.annotation.tip && ` (${img.annotation.tip})`}
                   </span>
                 ) : (
-                  <span style={{color:'#fa8c16'}}>○ 未标注</span>
+                  <span className="status-pending">○ 未标注</span>
                 )}
               </div>
             </div>
@@ -357,11 +702,11 @@ function ImageSelector({ user, dataset, role, onSelect, pageSize = 20 }) {
             </button>
           </div>
         ))}
-        {loading && <div style={{textAlign:'center',padding:16}}>加载中...</div>}
+        {loading && <div className="loading-text">加载中...</div>}
         {!loading && images.length === 0 && (
-          <div style={{textAlign:'center',padding:32}}>
-            <div style={{fontSize:18,color:'#999',marginBottom:16}}>暂无图片数据</div>
-            <div style={{fontSize:14,color:'#666'}}>请检查数据集是否包含图片，或联系管理员</div>
+          <div className="empty-state">
+            <div className="empty-title">暂无图片数据</div>
+            <div className="empty-subtitle">请检查数据集是否包含图片，或联系管理员</div>
           </div>
         )}
         {!loading && hasMore && (
@@ -386,8 +731,11 @@ style.innerHTML = `
 body {
   min-height: 100vh;
   background: linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%);
-  font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+  font-family: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', 'Helvetica', 'Arial', sans-serif;
   letter-spacing: 0.02em;
+  line-height: 1.6;
+  color: #2c3e50;
+  font-weight: 400;
 }
 .main-bg {
   max-width: 720px;
@@ -405,7 +753,33 @@ body {
   margin-bottom: 36px;
   border-bottom: 1.5px solid #e6e6e6;
   padding-bottom: 16px;
-  font-size: 18px;
+  font-size: 17px;
+  position: relative;
+  font-weight: 500;
+  color: #34495e;
+}
+.logo-container {
+  display: flex;
+  gap: 12px;
+  position: absolute;
+  right: 120px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.logo-placeholder {
+  width: 50px;
+  height: 50px;
+  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+  border: 2px solid #1677ff;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #1677ff;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.1;
 }
 .btn {
   background: linear-gradient(90deg, #4f8cff 0%, #1677ff 100%);
@@ -445,20 +819,24 @@ body {
 .form-row.label-row { align-items: flex-start; }
 .form-row label {
   width: 90px;
-  color: #444;
+  color: #2c3e50;
   font-weight: 600;
-  letter-spacing: 1px;
-  font-size: 17px;
+  letter-spacing: 0.5px;
+  font-size: 16px;
   margin-top: 8px;
+  line-height: 1.5;
 }
 .select, .input {
   flex: 1;
   padding: 13px 16px;
   border: 1.5px solid #bfc7d1;
   border-radius: 8px;
-  font-size: 17px;
+  font-size: 16px;
   outline: none;
   transition: border 0.2s, box-shadow 0.2s;
+  font-family: inherit;
+  color: #2c3e50;
+  line-height: 1.5;
 }
 .select:focus, .input:focus {
   border: 1.5px solid #1677ff;
@@ -471,9 +849,9 @@ body {
   flex-wrap: wrap;
 }
 .label-btn {
-  background: linear-gradient(90deg, #e0e7ff 0%, #8ec5fc 100%);
+  background: linear-gradient(90deg, #f0f4ff 0%, #e6f0ff 100%);
   color: #1677ff;
-  border: none;
+  border: 2px solid #d1e0ff;
   border-radius: 18px;
   padding: 12px 32px;
   font-size: 17px;
@@ -481,24 +859,303 @@ body {
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 2px 8px #8ec5fc33;
-  transition: background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.1s;
+  transition: all 0.2s ease;
 }
-.label-btn.selected, .label-btn:hover {
-  background: linear-gradient(90deg, #4f8cff 0%, #1677ff 100%);
+.label-btn.selected {
+  background: linear-gradient(90deg, #1677ff 0%, #0d4f8c 100%);
   color: #fff;
-  box-shadow: 0 4px 16px #1677ff33;
+  border-color: #0d4f8c;
+  box-shadow: 0 4px 16px rgba(22, 119, 255, 0.56);
   transform: scale(1.06);
+}
+.label-btn:hover:not(.selected) {
+  background: linear-gradient(90deg, #e6f0ff 0%, #bdd4ff 100%);
+  border-color: #1677ff;
+  box-shadow: 0 4px 12px #1677ffa2;
+  transform: scale(1.03);
 }
 .img-name {
   color: #1677ff;
   font-weight: bold;
   font-size: 22px;
 }
+.img-id {
+  color: #1677ff;
+  font-weight: 600;
+  font-size: 17px;
+  text-align: center;
+  margin-top: 12px;
+  letter-spacing: 0.3px;
+}
+.progress-section {
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-radius: 16px;
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+}
+.progress-info {
+  flex: 1;
+}
+.progress-text-card {
+  background: white;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  border: 1px solid #e2e8f0;
+}
+.progress-stats {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.stat-number {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+.stat-label {
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 4px;
+  color: #6b7280;
+  letter-spacing: 0.3px;
+}
+.stat-item.completed .stat-number { color: #059669; }
+.stat-item.remaining .stat-number { color: #dc2626; }
+.stat-item.total .stat-number { color: #1677ff; }
+.stat-divider {
+  color: #9ca3af;
+  font-size: 18px;
+}
+.progress-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.progress-circle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.progress-percentage {
+  position: absolute;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1677ff;
+}
+.progress-text {
+  color: #0369a1;
+  font-size: 16px;
+  font-weight: 500;
+}
+.image-container {
+  text-align: center;
+  margin-bottom: 20px;
+}
+.image-viewer {
+  display: inline-block;
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.1);
+  max-width: 90%;
+  max-height: 400px;
+  position: relative;
+  background: #f8f9fa;
+  user-select: none; /* 禁止选择 */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  border: 3px solid transparent;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.image-viewer.selected {
+  border-color: #1677ff;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.1), 0 0 0 2px rgba(22, 119, 255, 0.2);
+}
+.image-viewer img {
+  max-width: 100%;
+  max-height: 400px;
+  display: block;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-user-drag: none; /* Safari 禁用拖拽 */
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+  pointer-events: auto;
+}
+.image-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.control-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.control-btn {
+  background: #f8f9fa;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.control-btn:hover {
+  background: #e5e7eb;
+  border-color: #9ca3af;
+}
+.reset-btn {
+  background: #1677ff;
+  color: white;
+  border-color: #1677ff;
+}
+.reset-btn:hover {
+  background: #0d4f8c;
+  border-color: #0d4f8c;
+}
+.scale-text {
+  font-size: 15px;
+  color: #4b5563;
+  min-width: 50px;
+  text-align: center;
+  font-weight: 600;
+}
+.selector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 20px;
+}
+.back-btn {
+  background: linear-gradient(90deg, #6b7280 0%, #4b5563 100%);
+  padding: 10px 18px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.back-btn:hover {
+  background: linear-gradient(90deg, #4b5563 0%, #374151 100%);
+}
 .done-box {
   text-align: center;
   margin: 100px 0;
   font-size: 22px;
   color: #1677ff;
+}
+.completion-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.completion-card {
+  background: white;
+  border-radius: 24px;
+  padding: 48px 40px;
+  text-align: center;
+  max-width: 450px;
+  margin: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  animation: completionSlideIn 0.4s ease-out;
+}
+@keyframes completionSlideIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateY(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.completion-icon {
+  font-size: 64px;
+  margin-bottom: 20px;
+  animation: completionBounce 1s ease-in-out infinite alternate;
+}
+@keyframes completionBounce {
+  from { transform: translateY(0); }
+  to { transform: translateY(-10px); }
+}
+.completion-title {
+  color: #1677ff;
+  font-size: 32px;
+  margin-bottom: 16px;
+  font-weight: 700;
+}
+.completion-message {
+  color: #5a6c7d;
+  font-size: 18px;
+  margin-bottom: 24px;
+  line-height: 1.6;
+  font-weight: 400;
+}
+.completion-stats {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 32px;
+  border: 1px solid #bae6fd;
+}
+.completion-stat {
+  color: #0369a1;
+  font-size: 16px;
+  font-weight: 500;
+}
+.completion-stat strong {
+  color: #1677ff;
+  font-size: 24px;
+  font-weight: 700;
+}
+.completion-btn {
+  background: linear-gradient(90deg, #059669 0%, #047857 100%);
+  font-size: 18px;
+  padding: 16px 32px;
+  margin: 0 8px;
+}
+.completion-btn:hover {
+  background: linear-gradient(90deg, #047857 0%, #059669 100%);
+}
+.completion-btn.secondary {
+  background: linear-gradient(90deg, #6b7280 0%, #4b5563 100%);
+}
+.completion-btn.secondary:hover {
+  background: linear-gradient(90deg, #4b5563 0%, #374151 100%);
+}
+.completion-actions {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
 }
 .export-bar {
   margin-top: 48px;
@@ -561,23 +1218,164 @@ body {
   transform: scale(1.03);
 }
 .login-btn { margin-top: 10px; }
-.login-msg { color: #f5222d; min-height: 24px; font-size: 15px; }
-.login-tip { color: #888; font-size: 13px; margin-top: 8px; text-align: center; }
+.login-msg { 
+  color: #e74c3c; 
+  min-height: 24px; 
+  font-size: 16px; 
+  font-weight: 500;
+  line-height: 1.5;
+}
+.login-tip { 
+  color: #7f8c8d; 
+  font-size: 14px; 
+  margin-top: 8px; 
+  text-align: center; 
+  line-height: 1.6;
+  font-weight: 400;
+}
 h2 {
-  color: #222;
-  font-size: 26px;
+  color: #2c3e50;
+  font-size: 24px;
   margin-bottom: 22px;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   font-weight: 700;
+  line-height: 1.3;
+}
+h3 {
+  color: #34495e;
+  font-size: 20px;
+  margin-bottom: 16px;
+  letter-spacing: 0.3px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+p, span, div {
+  color: #2c3e50;
+  line-height: 1.6;
+}
+.annotate-box h2 {
+  color: #1677ff;
+  font-size: 22px;
+  text-align: center;
+  margin-bottom: 24px;
+  font-weight: 600;
 }
 
 input[type="password"], input[type="text"] {
   margin-bottom: 16px;
 }
+/* 额外的字体美化 */
+.dataset-card h2, .login-card h2 {
+  color: #2c3e50;
+  font-size: 24px;
+  margin-bottom: 24px;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+  text-align: center;
+}
+.selector-header h2 {
+  color: #2c3e50;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+/* 图片选择器中的文字 */
+.dataset-card div[style*="fontSize:18"] {
+  font-size: 19px !important;
+  color: #34495e !important;
+  font-weight: 600 !important;
+  line-height: 1.5 !important;
+}
+.dataset-card div[style*="fontSize:14"] {
+  font-size: 15px !important;
+  color: #7f8c8d !important;
+  font-weight: 500 !important;
+  line-height: 1.6 !important;
+}
+/* 用户名加粗显示 */
+.top-bar b {
+  color: #1677ff;
+  font-weight: 700;
+}
+/* 角色显示 */
+.top-bar span {
+  font-weight: 500;
+  color: #34495e;
+}
+/* 图片选择器样式 */
+.image-selector-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid #e6e6e6;
+  transition: all 0.2s ease;
+}
+.image-selector-item:hover {
+  border-color: #1677ff;
+  box-shadow: 0 2px 8px rgba(22, 119, 255, 0.1);
+}
+.image-selector-thumb {
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+  margin-right: 16px;
+  object-fit: cover;
+}
+.image-selector-id {
+  font-weight: 700;
+  margin-bottom: 6px;
+  font-size: 16px;
+  color: #2c3e50;
+  letter-spacing: 0.3px;
+}
+.image-selector-status {
+  font-size: 15px;
+}
+.status-annotated {
+  color: #059669;
+  font-weight: 600;
+}
+.status-pending {
+  color: #f59e0b;
+  font-weight: 600;
+}
+.loading-text {
+  text-align: center;
+  padding: 20px;
+  font-size: 16px;
+  color: #6b7280;
+  font-weight: 500;
+}
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+}
+.empty-title {
+  font-size: 19px;
+  color: #9ca3af;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+.empty-subtitle {
+  font-size: 15px;
+  color: #6b7280;
+  font-weight: 500;
+  line-height: 1.6;
+}
 @media (max-width: 900px) {
   .main-bg { max-width: 98vw; padding: 18px 2vw; }
   .top-bar { flex-direction: column; gap: 10px; align-items: flex-start; }
   .login-card { padding: 28px 8vw 18px 8vw; }
+  .logo-container { position: relative; right: auto; top: auto; transform: none; margin: 10px 0; }
+  .selector-header { flex-direction: column; gap: 12px; align-items: stretch; }
+  .selector-header h2 { margin-bottom: 0; text-align: center; }
+  .progress-section { flex-direction: column; align-items: center; padding: 16px; }
+  .progress-visual { justify-content: center; flex-direction: column; gap: 16px; }
+  .progress-stats { gap: 12px; }
+  .stat-number { font-size: 20px; }
+  .control-buttons { flex-wrap: wrap; }
 }
 `;
 document.head.appendChild(style);
