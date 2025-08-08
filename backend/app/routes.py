@@ -1,4 +1,4 @@
-from flask import request, jsonify, send_file, current_app
+from flask import request, jsonify, send_file, current_app, render_template
 from flask import Blueprint
 import os
 import sys
@@ -11,6 +11,9 @@ from io import BytesIO
 # 添加后端目录到系统路径，用于导入数据库工具
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db_utils import get_next_annotation_id
+
+# 数据集管理器
+from .dataset_manager import dataset_manager
 
 
 # 加载环境变量，连接MongoDB
@@ -117,21 +120,30 @@ def login():
 
 @bp.route('/api/datasets', methods=['GET'])
 def get_datasets():
-    # 获取所有数据集列表，根据用户角色返回可访问的数据集
+    """获取所有数据集列表，支持自动扫描static目录"""
     user_id = request.args.get('user_id')
     
-    # 从MongoDB获取数据集
     try:
-        datasets = list(db.datasets.find({}, {'_id': 0, 'id': 1, 'name': 1, 'description': 1}))
+        # 使用新的数据集管理器获取数据集列表
+        datasets = dataset_manager.get_datasets_list()
         
-        # 如果没有数据集，返回测试数据集
+        # 如果没有发现数据集，尝试从MongoDB获取
+        if not datasets:
+            try:
+                datasets = list(db.datasets.find({}, {'_id': 0, 'id': 1, 'name': 1, 'description': 1}))
+            except Exception as e:
+                current_app.logger.error(f"MongoDB查询失败: {e}")
+        
+        # 如果仍然没有数据集，返回测试数据集
         if not datasets:
             datasets = [
                 {"id": 1, "name": "测试数据集1", "description": "胸片异常检测"},
                 {"id": 2, "name": "测试数据集2", "description": "CT影像分析"}
             ]
         
+        current_app.logger.info(f"返回数据集列表，共 {len(datasets)} 个数据集")
         return jsonify(datasets)
+        
     except Exception as e:
         current_app.logger.error(f"获取数据集失败: {e}")
         # 返回默认测试数据集
@@ -143,6 +155,7 @@ def get_datasets():
 # 获取指定数据集下所有图片及标注（供选择进入和修改）
 @bp.route('/api/images_with_annotations', methods=['POST'])
 def images_with_annotations():
+    """获取数据集图片和标注信息，支持新的编号系统"""
     data = request.json
     ds_id = data.get('dataset_id')
     expert_id = data.get('expert_id')
@@ -155,29 +168,45 @@ def images_with_annotations():
     actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)  # 默认为student
     
     try:
-        # 确保ds_id正确处理，支持字符串和整数
+        # 确保ds_id为整数类型
         if isinstance(ds_id, str) and ds_id.isdigit():
             ds_id = int(ds_id)
-        # 如果ds_id是字符串但不是数字，保持字符串类型
         
-        # 从MongoDB获取该数据集下所有图片
-        imgs = list(db.images.find({'dataset_id': ds_id}, {'_id': 0}))
-        
-        # 如果MongoDB中没有图片，使用测试数据
-        if not imgs:
-            # 对于测试数据，需要处理类型匹配
-            if isinstance(ds_id, int):
-                imgs = [img for img in IMAGES if img['dataset_id'] == ds_id]
-            else:
-                # 如果ds_id是字符串，不会在IMAGES中找到匹配项，返回空列表
-                imgs = []
-            current_app.logger.info(f"使用测试图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
+        # 使用新的数据集管理器获取图片信息
+        dataset = dataset_manager.get_dataset_by_id(ds_id)
+        if dataset:
+            imgs = dataset['images']
+            current_app.logger.info(f"使用数据集管理器获取图片，数据集 {ds_id}，图片数量: {len(imgs)}")
         else:
-            # 为MongoDB中的图片数据添加缺失的image_id字段
-            for i, img in enumerate(imgs):
-                if 'image_id' not in img:
-                    img['image_id'] = i + 1  # 生成一个简单的image_id
-            current_app.logger.info(f"使用MongoDB图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
+            # 回退到MongoDB查询
+            imgs = list(db.images.find({'dataset_id': ds_id}, {'_id': 0}))
+            
+            # 如果MongoDB中没有图片，使用测试数据
+            if not imgs:
+                if isinstance(ds_id, int):
+                    imgs = [img for img in IMAGES if img['dataset_id'] == ds_id]
+                    # 为测试数据添加新的字段
+                    for i, img in enumerate(imgs):
+                        if 'seq_in_dataset' not in img:
+                            img['seq_in_dataset'] = i + 1
+                        if 'display_id' not in img:
+                            # 生成展示ID（需要数据集代码）
+                            dataset_code = f"D{ds_id:02d}"  # 简单的代码生成
+                            img['display_id'] = f"{dataset_code}-{img['seq_in_dataset']:04d}"
+                else:
+                    imgs = []
+                current_app.logger.info(f"使用测试图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
+            else:
+                # 为MongoDB中的图片数据添加缺失字段
+                for i, img in enumerate(imgs):
+                    if 'image_id' not in img:
+                        img['image_id'] = i + 1
+                    if 'seq_in_dataset' not in img:
+                        img['seq_in_dataset'] = i + 1
+                    if 'display_id' not in img:
+                        dataset_code = f"D{ds_id:02d}"
+                        img['display_id'] = f"{dataset_code}-{img['seq_in_dataset']:04d}"
+                current_app.logger.info(f"使用MongoDB图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
             
         # 获取该角色的所有标注
         annotations = list(db.annotations.find({
@@ -927,3 +956,570 @@ def export_excel(ds_id):
     except Exception as e:
         current_app.logger.error(f"数据集{ds_id}导出Excel失败: {e}")
         return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/export_dataset', methods=['GET'])
+def export_dataset():
+    """导出单个数据集的Excel文件（新版本，支持智能编号）"""
+    dataset_id = request.args.get('dataset_id')
+    
+    if not dataset_id:
+        return jsonify({"error": "缺少dataset_id参数"}), 400
+    
+    try:
+        dataset_id = int(dataset_id)
+        
+        # 使用数据集管理器获取导出数据
+        export_data = dataset_manager.get_export_data(dataset_id)
+        
+        if not export_data:
+            return jsonify({"error": f"数据集 {dataset_id} 未找到或无数据"}), 404
+        
+        # 创建Excel文件
+        output = BytesIO()
+        
+        # 转换为DataFrame
+        df = pd.DataFrame(export_data)
+        
+        # 字段排序
+        column_order = [
+            'dataset_id', 'dataset_code', 'dataset_name',
+            'image_id', 'display_id', 'seq_in_dataset', 'filename',
+            'label_id', 'label_name', 'tip',
+            'expert_id', 'annotated_at', 'created_at', 'file_size'
+        ]
+        available_columns = [col for col in column_order if col in df.columns]
+        df = df.reindex(columns=available_columns)
+        
+        # 按seq_in_dataset排序
+        df = df.sort_values('seq_in_dataset')
+        
+        # 写入Excel
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='dataset_annotations', index=False)
+        
+        output.seek(0)
+        
+        # 生成文件名
+        dataset_code = export_data[0]['dataset_code'] if export_data else f"D{dataset_id:02d}"
+        filename = f"{dataset_code}_annotations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        current_app.logger.info(f"成功导出数据集 {dataset_id}，共 {len(export_data)} 条记录")
+        
+        return send_file(output, 
+                        as_attachment=True, 
+                        download_name=filename, 
+                        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    
+    except Exception as e:
+        current_app.logger.error(f"导出数据集 {dataset_id} 失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/export_all', methods=['GET'])
+def export_all_datasets():
+    """导出所有数据集的Excel文件（多Sheet格式）"""
+    try:
+        # 使用数据集管理器获取所有数据集的导出数据
+        all_export_data = dataset_manager.get_export_data()
+        
+        if not all_export_data:
+            return jsonify({"error": "未找到任何数据集或数据"}), 404
+        
+        # 按数据集分组
+        datasets_data = {}
+        for record in all_export_data:
+            dataset_code = record['dataset_code']
+            if dataset_code not in datasets_data:
+                datasets_data[dataset_code] = []
+            datasets_data[dataset_code].append(record)
+        
+        # 创建Excel文件
+        output = BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # 为每个数据集创建一个Sheet
+            for dataset_code, data in datasets_data.items():
+                df = pd.DataFrame(data)
+                
+                # 字段排序
+                column_order = [
+                    'dataset_id', 'dataset_code', 'dataset_name',
+                    'image_id', 'display_id', 'seq_in_dataset', 'filename',
+                    'label_id', 'label_name', 'tip',
+                    'expert_id', 'annotated_at', 'created_at', 'file_size'
+                ]
+                available_columns = [col for col in column_order if col in df.columns]
+                df = df.reindex(columns=available_columns)
+                
+                # 按seq_in_dataset排序
+                df = df.sort_values('seq_in_dataset')
+                
+                # 使用数据集代码作为Sheet名称（Excel Sheet名称限制31字符）
+                sheet_name = dataset_code[:31] if len(dataset_code) > 31 else dataset_code
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            # 创建汇总Sheet
+            all_df = pd.DataFrame(all_export_data)
+            column_order = [
+                'dataset_id', 'dataset_code', 'dataset_name',
+                'image_id', 'display_id', 'seq_in_dataset', 'filename',
+                'label_id', 'label_name', 'tip',
+                'expert_id', 'annotated_at', 'created_at', 'file_size'
+            ]
+            available_columns = [col for col in column_order if col in all_df.columns]
+            all_df = all_df.reindex(columns=available_columns)
+            all_df = all_df.sort_values(['dataset_id', 'seq_in_dataset'])
+            all_df.to_excel(writer, sheet_name='All_Datasets', index=False)
+        
+        output.seek(0)
+        
+        # 生成文件名
+        filename = f"all_datasets_annotations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        total_records = len(all_export_data)
+        total_datasets = len(datasets_data)
+        current_app.logger.info(f"成功导出所有数据集，共 {total_datasets} 个数据集，{total_records} 条记录")
+        
+        return send_file(output, 
+                        as_attachment=True, 
+                        download_name=filename, 
+                        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    
+    except Exception as e:
+        current_app.logger.error(f"导出所有数据集失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/datasets/scan', methods=['POST'])
+def scan_datasets():
+    """手动触发数据集扫描"""
+    try:
+        # 强制刷新数据集缓存
+        datasets = dataset_manager.scan_datasets(force_refresh=True)
+        
+        return jsonify({
+            "message": "数据集扫描完成",
+            "datasets_count": len(datasets),
+            "datasets": list(datasets.keys())
+        })
+    
+    except Exception as e:
+        current_app.logger.error(f"扫描数据集失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/datasets/<int:dataset_id>/info', methods=['GET'])
+def get_dataset_info(dataset_id):
+    """获取数据集详细信息"""
+    try:
+        dataset = dataset_manager.get_dataset_by_id(dataset_id)
+        
+        if not dataset:
+            return jsonify({"error": f"数据集 {dataset_id} 不存在"}), 404
+        
+        # 返回数据集信息（不包含完整的图片列表以减少响应大小）
+        info = {
+            'id': dataset['id'],
+            'code': dataset['code'],
+            'name': dataset['name'],
+            'description': dataset['description'],
+            'category': dataset.get('category', 'general'),
+            'total_images': dataset['total_images'],
+            'active': dataset.get('active', True),
+            'created_at': dataset.get('created_at'),
+            'folder_path': dataset['folder_path'],
+            'metadata': dataset.get('metadata', {})
+        }
+        
+        return jsonify(info)
+    
+    except Exception as e:
+        current_app.logger.error(f"获取数据集信息失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============= Admin数据集管理接口 =============
+
+def check_admin_auth(expert_id):
+    """检查是否为admin用户"""
+    if not expert_id:
+        return False
+    for user in USERS:
+        if user['username'] == expert_id and user['role'] == 'admin':
+            return True
+    return False
+
+@bp.route('/api/admin/datasets', methods=['GET'])
+def admin_get_all_datasets():
+    """管理员获取所有数据集（包括未激活的）"""
+    expert_id = request.args.get('expert_id')
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        # 强制刷新并获取所有数据集
+        datasets = dataset_manager.scan_datasets(force_refresh=True)
+        
+        # 返回完整信息
+        result = []
+        for code, dataset in datasets.items():
+            result.append({
+                'id': dataset['id'],
+                'code': dataset['code'],
+                'name': dataset['name'],
+                'description': dataset['description'],
+                'category': dataset.get('category', 'general'),
+                'total_images': dataset['total_images'],
+                'active': dataset.get('active', True),
+                'created_at': dataset.get('created_at'),
+                'folder_path': dataset['folder_path'],
+                'metadata': dataset.get('metadata', {})
+            })
+        
+        current_app.logger.info(f"管理员 {expert_id} 查看所有数据集，共 {len(result)} 个")
+        return jsonify(result)
+    
+    except Exception as e:
+        current_app.logger.error(f"管理员获取数据集失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/<string:code>/toggle', methods=['POST'])
+def admin_toggle_dataset(code):
+    """管理员切换数据集激活状态"""
+    data = request.json
+    expert_id = data.get('expert_id')
+    active = data.get('active', True)
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        dataset = dataset_manager.get_dataset_by_code(code)
+        if not dataset:
+            return jsonify({"error": f"数据集 {code} 不存在"}), 404
+        
+        # 更新元数据
+        metadata = dataset.get('metadata', {})
+        metadata['active'] = active
+        metadata['last_modified'] = datetime.now().isoformat()
+        metadata['modified_by'] = expert_id
+        
+        success = dataset_manager.create_dataset_metadata(code, metadata)
+        
+        if success:
+            action = "激活" if active else "停用"
+            current_app.logger.info(f"管理员 {expert_id} {action}数据集 {code}")
+            return jsonify({"message": f"数据集 {code} 已{action}"})
+        else:
+            return jsonify({"error": "更新失败"}), 500
+    
+    except Exception as e:
+        current_app.logger.error(f"切换数据集状态失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/<string:code>/metadata', methods=['PUT'])
+def admin_update_dataset_metadata(code):
+    """管理员更新数据集元数据"""
+    data = request.json
+    expert_id = data.get('expert_id')
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        dataset = dataset_manager.get_dataset_by_code(code)
+        if not dataset:
+            return jsonify({"error": f"数据集 {code} 不存在"}), 404
+        
+        # 更新元数据
+        metadata = dataset.get('metadata', {})
+        
+        # 允许更新的字段
+        updatable_fields = ['name', 'description', 'category']
+        for field in updatable_fields:
+            if field in data:
+                metadata[field] = data[field]
+        
+        metadata['last_modified'] = datetime.now().isoformat()
+        metadata['modified_by'] = expert_id
+        
+        success = dataset_manager.create_dataset_metadata(code, metadata)
+        
+        if success:
+            current_app.logger.info(f"管理员 {expert_id} 更新数据集 {code} 元数据")
+            return jsonify({"message": f"数据集 {code} 元数据已更新"})
+        else:
+            return jsonify({"error": "更新失败"}), 500
+    
+    except Exception as e:
+        current_app.logger.error(f"更新数据集元数据失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/create', methods=['POST'])
+def admin_create_dataset():
+    """管理员创建新数据集（仅创建目录和元数据）"""
+    data = request.json
+    expert_id = data.get('expert_id')
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        code = data.get('code', '').strip()
+        name = data.get('name', '').strip()
+        description = data.get('description', '').strip()
+        category = data.get('category', 'general').strip()
+        
+        if not code or not name:
+            return jsonify({"error": "数据集代码和名称不能为空"}), 400
+        
+        # 检查代码是否已存在
+        existing = dataset_manager.get_dataset_by_code(code)
+        if existing:
+            return jsonify({"error": f"数据集代码 {code} 已存在"}), 400
+        
+        # 创建数据集目录
+        dataset_path = os.path.join(dataset_manager.static_root, code)
+        if not os.path.exists(dataset_path):
+            os.makedirs(dataset_path, exist_ok=True)
+        
+        # 创建元数据
+        metadata = {
+            'name': name,
+            'description': description,
+            'category': category,
+            'active': True,
+            'created_at': datetime.now().isoformat(),
+            'created_by': expert_id
+        }
+        
+        success = dataset_manager.create_dataset_metadata(code, metadata)
+        
+        if success:
+            current_app.logger.info(f"管理员 {expert_id} 创建数据集 {code}")
+            return jsonify({"message": f"数据集 {code} 创建成功，请上传图片文件到目录"})
+        else:
+            return jsonify({"error": "创建失败"}), 500
+    
+    except Exception as e:
+        current_app.logger.error(f"创建数据集失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============= 文件上传管理接口 =============
+
+@bp.route('/api/admin/datasets/<string:code>/upload', methods=['POST'])
+def admin_upload_images(code):
+    """管理员上传图片到指定数据集"""
+    expert_id = request.form.get('expert_id')
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        dataset = dataset_manager.get_dataset_by_code(code)
+        if not dataset:
+            return jsonify({"error": f"数据集 {code} 不存在"}), 404
+        
+        if 'files' not in request.files:
+            return jsonify({"error": "未选择文件"}), 400
+        
+        files = request.files.getlist('files')
+        if not files or files[0].filename == '':
+            return jsonify({"error": "未选择有效文件"}), 400
+        
+        uploaded_files = []
+        failed_files = []
+        
+        for file in files:
+            if file and file.filename:
+                # 检查文件类型
+                filename = file.filename
+                _, ext = os.path.splitext(filename.lower())
+                
+                if ext not in dataset_manager.image_extensions:
+                    failed_files.append(f"{filename}: 不支持的文件格式")
+                    continue
+                
+                # 生成安全的文件名
+                import uuid
+                safe_filename = f"{uuid.uuid4().hex}_{filename}"
+                
+                # 保存文件
+                file_path = os.path.join(dataset['folder_path'], safe_filename)
+                try:
+                    file.save(file_path)
+                    uploaded_files.append(safe_filename)
+                    current_app.logger.info(f"上传图片: {safe_filename} 到数据集 {code}")
+                except Exception as save_error:
+                    failed_files.append(f"{filename}: 保存失败 - {str(save_error)}")
+        
+        # 刷新数据集缓存
+        dataset_manager.scan_datasets(force_refresh=True)
+        
+        result = {
+            "message": f"上传完成",
+            "uploaded": len(uploaded_files),
+            "failed": len(failed_files),
+            "uploaded_files": uploaded_files,
+            "failed_files": failed_files
+        }
+        
+        current_app.logger.info(f"管理员 {expert_id} 向数据集 {code} 上传 {len(uploaded_files)} 个文件")
+        return jsonify(result)
+    
+    except Exception as e:
+        current_app.logger.error(f"上传图片失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/<string:code>/images', methods=['GET'])
+def admin_get_dataset_images(code):
+    """管理员获取数据集图片列表"""
+    expert_id = request.args.get('expert_id')
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        dataset = dataset_manager.get_dataset_by_code(code)
+        if not dataset:
+            return jsonify({"error": f"数据集 {code} 不存在"}), 404
+        
+        images = dataset['images']
+        
+        # 添加图片预览URL
+        for img in images:
+            img['preview_url'] = f"/static/{code}/{img['filename']}"
+        
+        return jsonify({
+            "dataset_code": code,
+            "dataset_name": dataset['name'],
+            "total_images": len(images),
+            "images": images
+        })
+    
+    except Exception as e:
+        current_app.logger.error(f"获取数据集图片失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/<string:code>/images/<string:filename>', methods=['DELETE'])
+def admin_delete_image(code, filename):
+    """管理员删除数据集中的图片"""
+    data = request.json
+    expert_id = data.get('expert_id')
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        dataset = dataset_manager.get_dataset_by_code(code)
+        if not dataset:
+            return jsonify({"error": f"数据集 {code} 不存在"}), 404
+        
+        file_path = os.path.join(dataset['folder_path'], filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"文件 {filename} 不存在"}), 404
+        
+        # 删除文件
+        os.remove(file_path)
+        
+        # 刷新数据集缓存
+        dataset_manager.scan_datasets(force_refresh=True)
+        
+        current_app.logger.info(f"管理员 {expert_id} 删除数据集 {code} 中的图片 {filename}")
+        return jsonify({"message": f"图片 {filename} 已删除"})
+    
+    except Exception as e:
+        current_app.logger.error(f"删除图片失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============= 数据集统计接口 =============
+
+@bp.route('/api/admin/statistics', methods=['GET'])
+def admin_get_statistics():
+    """管理员获取系统统计信息"""
+    expert_id = request.args.get('expert_id')
+    
+    if not check_admin_auth(expert_id):
+        return jsonify({"error": "权限不足，仅管理员可访问"}), 403
+    
+    try:
+        datasets = dataset_manager.scan_datasets(force_refresh=True)
+        
+        # 统计信息
+        total_datasets = len(datasets)
+        active_datasets = sum(1 for ds in datasets.values() if ds.get('active', True))
+        total_images = sum(ds['total_images'] for ds in datasets.values())
+        
+        # 标注统计
+        total_annotations = 0
+        annotations_by_role = {'admin': 0, 'doctor': 0, 'student': 0}
+        
+        try:
+            # 从MongoDB获取标注统计
+            annotations = list(db.annotations.find({}, {'_id': 0, 'expert_id': 1}))
+            if not annotations:
+                annotations = ANNOTATIONS
+            
+            total_annotations = len(annotations)
+            
+            for ann in annotations:
+                expert_id_val = ann.get('expert_id', 2)
+                role_name = None
+                for role, role_id in ROLE_TO_EXPERT_ID.items():
+                    if role_id == expert_id_val:
+                        role_name = role
+                        break
+                
+                if role_name and role_name in annotations_by_role:
+                    annotations_by_role[role_name] += 1
+        
+        except Exception as e:
+            current_app.logger.warning(f"获取标注统计失败: {e}")
+        
+        # 按数据集分组的统计
+        dataset_stats = []
+        for code, dataset in datasets.items():
+            ds_annotations = 0
+            try:
+                ds_annotations = len(list(db.annotations.find({'dataset_id': dataset['id']}, {'_id': 0})))
+                if ds_annotations == 0:
+                    ds_annotations = len([a for a in ANNOTATIONS if a.get('dataset_id') == dataset['id']])
+            except:
+                ds_annotations = len([a for a in ANNOTATIONS if a.get('dataset_id') == dataset['id']])
+            
+            dataset_stats.append({
+                'code': code,
+                'name': dataset['name'],
+                'total_images': dataset['total_images'],
+                'total_annotations': ds_annotations,
+                'completion_rate': round((ds_annotations / dataset['total_images'] * 100) if dataset['total_images'] > 0 else 0, 2),
+                'active': dataset.get('active', True)
+            })
+        
+        result = {
+            'system_overview': {
+                'total_datasets': total_datasets,
+                'active_datasets': active_datasets,
+                'total_images': total_images,
+                'total_annotations': total_annotations
+            },
+            'annotations_by_role': annotations_by_role,
+            'dataset_statistics': dataset_stats,
+            'generated_at': datetime.now().isoformat()
+        }
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        current_app.logger.error(f"获取系统统计失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============= Web管理界面 =============
+
+@bp.route('/admin')
+def admin_page():
+    """管理员Web界面"""
+    return render_template('admin.html')
+
+@bp.route('/admin/datasets')
+def admin_datasets_page():
+    """数据集管理页面"""
+    return render_template('admin.html')

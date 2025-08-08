@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据集管理 - Medical Annotation System</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .main-content {
+            padding: 40px;
+        }
+        
+        .auth-section {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .auth-input {
+            padding: 12px 20px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 16px;
+            margin: 0 10px;
+            width: 200px;
+        }
+        
+        .auth-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #51cf66 0%, #40c057 100%);
+        }
+        
+        .section {
+            margin: 40px 0;
+            padding: 30px;
+            border: 1px solid #e1e5e9;
+            border-radius: 12px;
+            background: #f8f9fa;
+        }
+        
+        .section h2 {
+            color: #495057;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+        }
+        
+        .dataset-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .dataset-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .dataset-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+        }
+        
+        .dataset-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .dataset-code {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        
+        .status-active {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-inactive {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .dataset-info {
+            margin: 15px 0;
+        }
+        
+        .dataset-info p {
+            margin: 5px 0;
+            color: #6c757d;
+        }
+        
+        .progress-bar {
+            background: #e9ecef;
+            border-radius: 10px;
+            height: 8px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            background: linear-gradient(135deg, #51cf66 0%, #40c057 100%);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
+        .form-row {
+            margin: 15px 0;
+        }
+        
+        .form-row label {
+            display: block;
+            margin-bottom: 5px;
+            color: #495057;
+            font-weight: 500;
+        }
+        
+        .form-row input, .form-row textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .form-row textarea {
+            height: 80px;
+            resize: vertical;
+        }
+        
+        .upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 12px;
+            padding: 40px 20px;
+            text-align: center;
+            background: #f8f9ff;
+            margin: 20px 0;
+            transition: background-color 0.3s;
+        }
+        
+        .upload-area:hover {
+            background: #f0f2ff;
+        }
+        
+        .upload-area.dragover {
+            background: #e6eaff;
+            border-color: #5a67d8;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+        }
+        
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            color: #6c757d;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏥 医学图像数据集管理系统</h1>
+            <p>管理员控制面板 - 数据集上传、编辑和管理</p>
+        </div>
+        
+        <div class="main-content">
+            <!-- 认证区域 -->
+            <div class="auth-section">
+                <input type="text" id="adminUsername" class="auth-input" placeholder="管理员用户名" value="admin">
+                <input type="password" id="adminPassword" class="auth-input" placeholder="密码" value="admin123">
+                <button class="btn" onclick="authenticate()">登录</button>
+            </div>
+            
+            <div id="authError" class="alert alert-error hidden">
+                认证失败，请检查用户名和密码
+            </div>
+            
+            <!-- 主要内容区域（需要认证后显示） -->
+            <div id="mainContent" class="hidden">
+                
+                <!-- 系统统计 -->
+                <div class="section">
+                    <h2>📊 系统概览</h2>
+                    <div class="stats-grid" id="systemStats">
+                        <!-- 统计数据将通过JavaScript填充 -->
+                    </div>
+                </div>
+                
+                <!-- 创建新数据集 -->
+                <div class="section">
+                    <h2>➕ 创建新数据集</h2>
+                    <div class="form-row">
+                        <label>数据集代码 (英文字母和数字，如: DCT01, DRetina)</label>
+                        <input type="text" id="newDatasetCode" placeholder="例如: DCT01">
+                    </div>
+                    <div class="form-row">
+                        <label>数据集名称</label>
+                        <input type="text" id="newDatasetName" placeholder="例如: 胸部CT影像数据集">
+                    </div>
+                    <div class="form-row">
+                        <label>描述</label>
+                        <textarea id="newDatasetDesc" placeholder="描述数据集的用途和内容"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <label>分类</label>
+                        <input type="text" id="newDatasetCategory" placeholder="例如: CT, X-Ray, MRI" value="CT">
+                    </div>
+                    <button class="btn btn-success" onclick="createDataset()">创建数据集</button>
+                </div>
+                
+                <!-- 文件上传区域 -->
+                <div class="section">
+                    <h2>📁 图片上传</h2>
+                    <div class="form-row">
+                        <label>选择目标数据集</label>
+                        <select id="uploadDatasetSelect">
+                            <option value="">请先选择数据集</option>
+                        </select>
+                    </div>
+                    <div class="upload-area" id="uploadArea">
+                        <p>📤 拖拽图片到此处或点击选择文件</p>
+                        <p style="color: #6c757d; margin-top: 10px;">支持 JPG, PNG, BMP, TIFF 格式</p>
+                        <input type="file" id="fileInput" multiple accept="image/*" style="display: none;">
+                        <button class="btn" onclick="document.getElementById('fileInput').click()">选择文件</button>
+                    </div>
+                </div>
+                
+                <!-- 数据集列表 -->
+                <div class="section">
+                    <h2>📚 数据集管理</h2>
+                    <button class="btn" onclick="loadDatasets()">🔄 刷新列表</button>
+                    <div class="dataset-grid" id="datasetGrid">
+                        <!-- 数据集列表将通过JavaScript填充 -->
+                    </div>
+                </div>
+                
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        
+        // 认证
+        async function authenticate() {
+            const username = document.getElementById('adminUsername').value;
+            const password = document.getElementById('adminPassword').value;
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.role === 'admin') {
+                    currentUser = username;
+                    document.getElementById('authError').classList.add('hidden');
+                    document.getElementById('mainContent').classList.remove('hidden');
+                    document.querySelector('.auth-section').style.display = 'none';
+                    
+                    // 加载数据
+                    await loadStatistics();
+                    await loadDatasets();
+                    setupUpload();
+                } else {
+                    document.getElementById('authError').classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('认证失败:', error);
+                document.getElementById('authError').classList.remove('hidden');
+            }
+        }
+        
+        // 加载系统统计
+        async function loadStatistics() {
+            try {
+                const response = await fetch(`/api/admin/statistics?expert_id=${currentUser}`);
+                if (response.ok) {
+                    const stats = await response.json();
+                    displayStatistics(stats);
+                }
+            } catch (error) {
+                console.error('加载统计数据失败:', error);
+            }
+        }
+        
+        // 显示统计数据
+        function displayStatistics(stats) {
+            const statsContainer = document.getElementById('systemStats');
+            const overview = stats.system_overview;
+            
+            statsContainer.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${overview.total_datasets}</div>
+                    <div class="stat-label">总数据集</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${overview.active_datasets}</div>
+                    <div class="stat-label">活跃数据集</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${overview.total_images}</div>
+                    <div class="stat-label">总图片数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${overview.total_annotations}</div>
+                    <div class="stat-label">总标注数</div>
+                </div>
+            `;
+        }
+        
+        // 加载数据集列表
+        async function loadDatasets() {
+            try {
+                const response = await fetch(`/api/admin/datasets?expert_id=${currentUser}`);
+                if (response.ok) {
+                    const datasets = await response.json();
+                    displayDatasets(datasets);
+                    updateUploadSelect(datasets);
+                }
+            } catch (error) {
+                console.error('加载数据集失败:', error);
+            }
+        }
+        
+        // 显示数据集
+        function displayDatasets(datasets) {
+            const container = document.getElementById('datasetGrid');
+            
+            container.innerHTML = datasets.map(dataset => `
+                <div class="dataset-card">
+                    <div class="dataset-header">
+                        <div class="dataset-code">${dataset.code}</div>
+                        <div class="status-badge ${dataset.active ? 'status-active' : 'status-inactive'}">
+                            ${dataset.active ? '✅ 活跃' : '⛔ 停用'}
+                        </div>
+                    </div>
+                    <div class="dataset-info">
+                        <h3>${dataset.name}</h3>
+                        <p>${dataset.description}</p>
+                        <p><strong>分类:</strong> ${dataset.category}</p>
+                        <p><strong>图片数量:</strong> ${dataset.total_images}</p>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${Math.min(100, (dataset.total_annotations || 0) / Math.max(1, dataset.total_images) * 100)}%"></div>
+                        </div>
+                        <p><strong>标注进度:</strong> ${dataset.total_annotations || 0}/${dataset.total_images} (${Math.round((dataset.total_annotations || 0) / Math.max(1, dataset.total_images) * 100)}%)</p>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <button class="btn btn-${dataset.active ? 'danger' : 'success'}" onclick="toggleDataset('${dataset.code}', ${!dataset.active})">
+                            ${dataset.active ? '⛔ 停用' : '✅ 激活'}
+                        </button>
+                        <button class="btn" onclick="viewDatasetImages('${dataset.code}')">🖼️ 查看图片</button>
+                        <button class="btn" onclick="exportDataset(${dataset.id})">📥 导出</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        // 更新上传下拉选项
+        function updateUploadSelect(datasets) {
+            const select = document.getElementById('uploadDatasetSelect');
+            select.innerHTML = '<option value="">请选择数据集</option>' + 
+                datasets.filter(ds => ds.active).map(ds => 
+                    `<option value="${ds.code}">${ds.code} - ${ds.name}</option>`
+                ).join('');
+        }
+        
+        // 创建数据集
+        async function createDataset() {
+            const code = document.getElementById('newDatasetCode').value.trim();
+            const name = document.getElementById('newDatasetName').value.trim();
+            const description = document.getElementById('newDatasetDesc').value.trim();
+            const category = document.getElementById('newDatasetCategory').value.trim();
+            
+            if (!code || !name) {
+                alert('请填写数据集代码和名称');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/admin/datasets/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        expert_id: currentUser,
+                        code,
+                        name,
+                        description,
+                        category
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert('数据集创建成功！');
+                    // 清空表单
+                    document.getElementById('newDatasetCode').value = '';
+                    document.getElementById('newDatasetName').value = '';
+                    document.getElementById('newDatasetDesc').value = '';
+                    document.getElementById('newDatasetCategory').value = 'CT';
+                    
+                    // 重新加载列表
+                    await loadDatasets();
+                    await loadStatistics();
+                } else {
+                    alert('创建失败: ' + result.error);
+                }
+            } catch (error) {
+                console.error('创建数据集失败:', error);
+                alert('创建失败: ' + error.message);
+            }
+        }
+        
+        // 切换数据集状态
+        async function toggleDataset(code, active) {
+            try {
+                const response = await fetch(`/api/admin/datasets/${code}/toggle`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        expert_id: currentUser,
+                        active
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(result.message);
+                    await loadDatasets();
+                } else {
+                    alert('操作失败: ' + result.error);
+                }
+            } catch (error) {
+                console.error('切换状态失败:', error);
+                alert('操作失败: ' + error.message);
+            }
+        }
+        
+        // 设置文件上传
+        function setupUpload() {
+            const uploadArea = document.getElementById('uploadArea');
+            const fileInput = document.getElementById('fileInput');
+            
+            // 拖拽上传
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+            
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('dragover');
+            });
+            
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                uploadFiles(files);
+            });
+            
+            // 文件选择上传
+            fileInput.addEventListener('change', (e) => {
+                uploadFiles(e.target.files);
+            });
+        }
+        
+        // 上传文件
+        async function uploadFiles(files) {
+            const datasetCode = document.getElementById('uploadDatasetSelect').value;
+            
+            if (!datasetCode) {
+                alert('请先选择目标数据集');
+                return;
+            }
+            
+            if (files.length === 0) {
+                alert('请选择要上传的文件');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('expert_id', currentUser);
+            
+            for (let file of files) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const response = await fetch(`/api/admin/datasets/${datasetCode}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(`上传完成！成功: ${result.uploaded}，失败: ${result.failed}`);
+                    if (result.failed_files.length > 0) {
+                        console.log('失败文件:', result.failed_files);
+                    }
+                    
+                    // 重新加载数据
+                    await loadDatasets();
+                    await loadStatistics();
+                } else {
+                    alert('上传失败: ' + result.error);
+                }
+            } catch (error) {
+                console.error('上传失败:', error);
+                alert('上传失败: ' + error.message);
+            }
+        }
+        
+        // 查看数据集图片
+        async function viewDatasetImages(code) {
+            try {
+                const response = await fetch(`/api/admin/datasets/${code}/images?expert_id=${currentUser}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    // 这里可以打开一个模态框显示图片
+                    alert(`数据集 ${code} 共有 ${data.total_images} 张图片`);
+                }
+            } catch (error) {
+                console.error('获取图片列表失败:', error);
+            }
+        }
+        
+        // 导出数据集
+        function exportDataset(datasetId) {
+            window.open(`/api/export_dataset?dataset_id=${datasetId}`, '_blank');
+        }
+        
+        // 页面加载时检查是否有保存的认证信息
+        window.addEventListener('load', () => {
+            // 可以在这里添加自动登录逻辑
+        });
+    </script>
+</body>
+</html>
