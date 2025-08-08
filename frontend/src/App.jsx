@@ -19,8 +19,8 @@ export default function App() {
       <div className="top-bar">
         <span>用户: <b>{user}</b> ({role})</span>
         <div className="logo-container">
-          <div className="logo-placeholder">实验室LOGO</div>
-          <div className="logo-placeholder">学校LOGO</div>
+          <img src="/实验室LOGO.png" alt="实验室LOGO" className="logo" />
+          <img src="/JNU-LOGO.jpg" alt="学校LOGO" className="logo" />
         </div>
         <button className="btn logout" onClick={handleLogout}>退出</button>
       </div>
@@ -758,13 +758,26 @@ body {
 }
 .logo-container {
   display: flex;
-  gap: 12px;
-  position: absolute;
-  right: 120px;
-  top: 50%;
-  transform: translateY(-50%);
+  gap: 16px;
+  align-items: center;
+}
+.logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  border: 1.5px solid #c7d2fe;
+  padding: 8px;
+  box-shadow: 0 3px 10px rgba(22, 119, 255, 0.18);
+}
+.logo-divider {
+  color: #c7d2fe;
+  font-weight: 700;
+  margin: 0 6px;
 }
 .logo-placeholder {
+  /* 保留旧类，避免其它地方引用时报错，但不再用于顶部 LOGO */
   width: 50px;
   height: 50px;
   background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
@@ -1364,16 +1377,9 @@ input[type="password"], input[type="text"] {
 }
 @media (max-width: 900px) {
   .main-bg { max-width: 98vw; padding: 18px 2vw; }
-  .top-bar { flex-direction: column; gap: 10px; align-items: flex-start; }
-  .login-card { padding: 28px 8vw 18px 8vw; }
-  .logo-container { position: relative; right: auto; top: auto; transform: none; margin: 10px 0; }
-  .selector-header { flex-direction: column; gap: 12px; align-items: stretch; }
-  .selector-header h2 { margin-bottom: 0; text-align: center; }
-  .progress-section { flex-direction: column; align-items: center; padding: 16px; }
-  .progress-visual { justify-content: center; flex-direction: column; gap: 16px; }
-  .progress-stats { gap: 12px; }
-  .stat-number { font-size: 20px; }
-  .control-buttons { flex-wrap: wrap; }
+  .top-bar { flex-direction: column; gap: 10px; align-items: center; }
+  .logo-container { margin: 6px 0; }
+  /* ...existing code... */
 }
 `;
 document.head.appendChild(style);
