@@ -203,6 +203,57 @@
             resize: vertical;
         }
         
+        .label-input-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin: 8px 0;
+        }
+        
+        .label-name {
+            flex: 2;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .label-desc {
+            flex: 3;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .btn-remove {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .btn-remove:hover {
+            background: #c82333;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
         .upload-area {
             border: 2px dashed #667eea;
             border-radius: 12px;
@@ -319,6 +370,20 @@
                     <div class="form-row">
                         <label>分类</label>
                         <input type="text" id="newDatasetCategory" placeholder="例如: CT, X-Ray, MRI" value="CT">
+                    </div>
+                    <div class="form-row">
+                        <label>标注标签 <span style="color: red;">*</span></label>
+                        <div id="labelsContainer">
+                            <div class="label-input-row">
+                                <input type="text" class="label-name" placeholder="标签名称（如：正常）" required>
+                                <input type="text" class="label-desc" placeholder="标签描述（可选）">
+                                <button type="button" class="btn-remove" onclick="removeLabelRow(this)">删除</button>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-secondary" onclick="addLabelRow()">+ 添加标签</button>
+                        <div style="margin-top: 8px; color: #6c757d; font-size: 0.9em;">
+                            每个数据集需要至少一个标签，用于图像标注分类
+                        </div>
                     </div>
                     <button class="btn btn-success" onclick="createDataset()">创建数据集</button>
                 </div>
@@ -485,15 +550,62 @@
                 ).join('');
         }
         
+        // 标签管理函数
+        function addLabelRow() {
+            const container = document.getElementById('labelsContainer');
+            const labelRow = document.createElement('div');
+            labelRow.className = 'label-input-row';
+            labelRow.innerHTML = `
+                <input type="text" class="label-name" placeholder="标签名称（如：正常）" required>
+                <input type="text" class="label-desc" placeholder="标签描述（可选）">
+                <button type="button" class="btn-remove" onclick="removeLabelRow(this)">删除</button>
+            `;
+            container.appendChild(labelRow);
+        }
+        
+        function removeLabelRow(button) {
+            const container = document.getElementById('labelsContainer');
+            if (container.children.length > 1) {
+                button.parentElement.remove();
+            } else {
+                alert('至少需要保留一个标签');
+            }
+        }
+        
+        function collectLabels() {
+            const labelRows = document.querySelectorAll('#labelsContainer .label-input-row');
+            const labels = [];
+            
+            for (let row of labelRows) {
+                const name = row.querySelector('.label-name').value.trim();
+                const description = row.querySelector('.label-desc').value.trim();
+                
+                if (name) {
+                    labels.push({
+                        name: name,
+                        description: description
+                    });
+                }
+            }
+            
+            return labels;
+        }
+        
         // 创建数据集
         async function createDataset() {
             const code = document.getElementById('newDatasetCode').value.trim();
             const name = document.getElementById('newDatasetName').value.trim();
             const description = document.getElementById('newDatasetDesc').value.trim();
             const category = document.getElementById('newDatasetCategory').value.trim();
+            const labels = collectLabels();
             
             if (!code || !name) {
                 alert('请填写数据集代码和名称');
+                return;
+            }
+            
+            if (labels.length === 0) {
+                alert('请至少添加一个标签');
                 return;
             }
             
@@ -508,19 +620,29 @@
                         code,
                         name,
                         description,
-                        category
+                        category,
+                        labels
                     })
                 });
                 
                 const result = await response.json();
                 
                 if (response.ok) {
-                    alert('数据集创建成功！');
+                    alert('数据集和标签创建成功！');
                     // 清空表单
                     document.getElementById('newDatasetCode').value = '';
                     document.getElementById('newDatasetName').value = '';
                     document.getElementById('newDatasetDesc').value = '';
                     document.getElementById('newDatasetCategory').value = 'CT';
+                    // 重置标签为一个空行
+                    const container = document.getElementById('labelsContainer');
+                    container.innerHTML = `
+                        <div class="label-input-row">
+                            <input type="text" class="label-name" placeholder="标签名称（如：正常）" required>
+                            <input type="text" class="label-desc" placeholder="标签描述（可选）">
+                            <button type="button" class="btn-remove" onclick="removeLabelRow(this)">删除</button>
+                        </div>
+                    `;
                     
                     // 重新加载列表
                     await loadDatasets();

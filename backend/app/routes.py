@@ -7,6 +7,10 @@ from datetime import datetime
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from io import BytesIO
+import logging
+
+# 设置日志
+logger = logging.getLogger(__name__)
 
 # 添加后端目录到系统路径，用于导入数据库工具
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1266,9 +1270,18 @@ def admin_create_dataset():
         name = data.get('name', '').strip()
         description = data.get('description', '').strip()
         category = data.get('category', 'general').strip()
+        labels = data.get('labels', [])  # 标签列表
         
         if not code or not name:
             return jsonify({"error": "数据集代码和名称不能为空"}), 400
+        
+        # 验证标签列表
+        if not labels or not isinstance(labels, list):
+            return jsonify({"error": "必须提供至少一个标签"}), 400
+        
+        for i, label in enumerate(labels):
+            if not isinstance(label, dict) or not label.get('name', '').strip():
+                return jsonify({"error": f"标签 {i+1} 格式错误或名称为空"}), 400
         
         # 检查代码是否已存在
         existing = dataset_manager.get_dataset_by_code(code)
@@ -1293,8 +1306,25 @@ def admin_create_dataset():
         success = dataset_manager.create_dataset_metadata(code, metadata)
         
         if success:
-            current_app.logger.info(f"管理员 {expert_id} 创建数据集 {code}")
-            return jsonify({"message": f"数据集 {code} 创建成功，请上传图片文件到目录"})
+            # 获取新创建的数据集ID
+            new_dataset = dataset_manager.get_dataset_by_code(code)
+            if new_dataset:
+                dataset_id = new_dataset['id']
+                
+                # 创建标签
+                label_success = dataset_manager.create_dataset_labels(dataset_id, labels)
+                
+                if label_success:
+                    current_app.logger.info(f"管理员 {expert_id} 创建数据集 {code} 及 {len(labels)} 个标签")
+                    return jsonify({
+                        "message": f"数据集 {code} 和标签创建成功，请上传图片文件",
+                        "dataset_id": dataset_id,
+                        "labels_created": len(labels)
+                    })
+                else:
+                    return jsonify({"warning": f"数据集 {code} 创建成功，但标签创建失败"}), 201
+            else:
+                return jsonify({"error": "数据集创建后无法获取ID"}), 500
         else:
             return jsonify({"error": "创建失败"}), 500
     
@@ -1523,3 +1553,158 @@ def admin_page():
 def admin_datasets_page():
     """数据集管理页面"""
     return render_template('admin.html')
+
+# =========================
+# 标签管理 API
+# =========================
+
+@bp.route('/api/admin/labels/<int:dataset_id>', methods=['GET'])
+def get_dataset_labels(dataset_id):
+    """获取数据集的标签列表"""
+    try:
+        labels = dataset_manager.get_dataset_labels(dataset_id)
+        return jsonify({"success": True, "labels": labels})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@bp.route('/api/admin/labels', methods=['POST'])
+def create_label():
+    """创建新标签"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "缺少数据"}), 400
+        
+        required_fields = ['dataset_id', 'name']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"success": False, "error": f"缺少必要字段: {field}"}), 400
+        
+        dataset_id = data['dataset_id']
+        name = data['name'].strip()
+        description = data.get('description', '').strip()
+        
+        if not name:
+            return jsonify({"success": False, "error": "标签名称不能为空"}), 400
+        
+        # 检查标签名是否已存在
+        existing_labels = dataset_manager.get_dataset_labels(dataset_id)
+        if any(label['name'] == name for label in existing_labels):
+            return jsonify({"success": False, "error": "标签名称已存在"}), 400
+        
+        # 计算新的label_id
+        max_id = max([label.get('label_id', 0) for label in existing_labels]) if existing_labels else 0
+        new_label_id = max_id + 1
+        
+        # 创建标签文档
+        label_doc = {
+            "label_id": new_label_id,
+            "dataset_id": dataset_id,
+            "name": name,
+            "description": description,
+            "active": True,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        # 保存到数据库
+        try:
+            db.labels.insert_one(label_doc.copy())
+        except Exception as e:
+            logger.warning(f"MongoDB保存标签失败，使用内存存储: {e}")
+        
+        # 保存到内存结构
+        memory_label = {
+            "label_id": new_label_id,
+            "dataset_id": dataset_id,
+            "name": name
+        }
+        LABELS.append(memory_label)
+        
+        return jsonify({"success": True, "label": label_doc})
+        
+    except Exception as e:
+        logger.error(f"创建标签失败: {e}")
+        return jsonify({"success": False, "error": "创建标签失败"}), 500
+
+@bp.route('/api/admin/labels/<int:label_id>', methods=['PUT'])
+def update_label(label_id):
+    """更新标签"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "缺少数据"}), 400
+        
+        name = data.get('name', '').strip()
+        description = data.get('description', '').strip()
+        
+        if not name:
+            return jsonify({"success": False, "error": "标签名称不能为空"}), 400
+        
+        # 更新数据库
+        update_data = {
+            "name": name,
+            "description": description,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        try:
+            result = db.labels.update_one(
+                {"label_id": label_id}, 
+                {"$set": update_data}
+            )
+            
+            if result.matched_count == 0:
+                return jsonify({"success": False, "error": "标签不存在"}), 404
+                
+        except Exception as e:
+            logger.warning(f"MongoDB更新标签失败: {e}")
+        
+        # 更新内存结构
+        for label in LABELS:
+            if label.get('label_id') == label_id:
+                label['name'] = name
+                break
+        
+        return jsonify({"success": True, "message": "标签更新成功"})
+        
+    except Exception as e:
+        logger.error(f"更新标签失败: {e}")
+        return jsonify({"success": False, "error": "更新标签失败"}), 500
+
+@bp.route('/api/admin/labels/<int:label_id>', methods=['DELETE'])
+def delete_label(label_id):
+    """软删除标签"""
+    try:
+        # 检查标签是否被使用
+        try:
+            annotation_count = db.annotations.count_documents({"label_id": label_id})
+            if annotation_count > 0:
+                return jsonify({
+                    "success": False, 
+                    "error": f"无法删除标签，仍有 {annotation_count} 个标注使用该标签"
+                }), 400
+        except Exception:
+            pass
+        
+        # 软删除：标记为inactive
+        try:
+            result = db.labels.update_one(
+                {"label_id": label_id}, 
+                {"$set": {"active": False, "deleted_at": datetime.now().isoformat()}}
+            )
+            
+            if result.matched_count == 0:
+                return jsonify({"success": False, "error": "标签不存在"}), 404
+                
+        except Exception as e:
+            logger.warning(f"MongoDB软删除标签失败: {e}")
+        
+        # 从内存中移除
+        global LABELS
+        LABELS = [label for label in LABELS if label.get('label_id') != label_id]
+        
+        return jsonify({"success": True, "message": "标签删除成功"})
+        
+    except Exception as e:
+        logger.error(f"删除标签失败: {e}")
+        return jsonify({"success": False, "error": "删除标签失败"}), 500

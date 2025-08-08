@@ -248,6 +248,78 @@ class DatasetManager:
             logger.error(f"创建数据集元数据失败 {code}: {e}")
             return False
     
+    def create_dataset_labels(self, dataset_id: int, labels: List[Dict]) -> bool:
+        """
+        为数据集创建标签
+        
+        Args:
+            dataset_id: 数据集ID
+            labels: 标签列表 [{"name": "正常", "description": ""}, ...]
+            
+        Returns:
+            bool: 是否创建成功
+        """
+        try:
+            from app.routes import db, LABELS  # 动态导入避免循环依赖
+            
+            created_labels = []
+            for i, label_info in enumerate(labels):
+                label_doc = {
+                    "label_id": i + 1,
+                    "dataset_id": dataset_id,
+                    "name": label_info.get("name", f"标签{i+1}"),
+                    "description": label_info.get("description", ""),
+                    "active": True,
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                # 保存到MongoDB
+                try:
+                    db.labels.insert_one(label_doc.copy())
+                except Exception:
+                    # MongoDB失败时保存到内存
+                    pass
+                
+                # 保存到内存结构
+                memory_label = {
+                    "label_id": i + 1,
+                    "dataset_id": dataset_id,
+                    "name": label_info.get("name", f"标签{i+1}")
+                }
+                LABELS.append(memory_label)
+                created_labels.append(memory_label)
+            
+            logger.info(f"为数据集 {dataset_id} 创建 {len(created_labels)} 个标签")
+            return True
+            
+        except Exception as e:
+            logger.error(f"创建数据集标签失败 {dataset_id}: {e}")
+            return False
+    
+    def get_dataset_labels(self, dataset_id: int) -> List[Dict]:
+        """获取数据集的标签列表"""
+        try:
+            from app.routes import db, LABELS
+            
+            # 优先从MongoDB获取
+            try:
+                labels = list(db.labels.find(
+                    {"dataset_id": dataset_id, "active": {"$ne": False}}, 
+                    {"_id": 0}
+                ))
+                if labels:
+                    return sorted(labels, key=lambda x: x.get('label_id', 0))
+            except Exception:
+                pass
+            
+            # 备用内存数据
+            memory_labels = [l for l in LABELS if l.get('dataset_id') == dataset_id]
+            return sorted(memory_labels, key=lambda x: x.get('label_id', 0))
+            
+        except Exception as e:
+            logger.error(f"获取数据集标签失败 {dataset_id}: {e}")
+            return []
+    
     def get_datasets_list(self) -> List[Dict]:
         """获取数据集列表（适用于API返回）"""
         datasets = self.scan_datasets()

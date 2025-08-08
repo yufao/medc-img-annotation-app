@@ -15,26 +15,35 @@ export default function App() {
   if (selectMode) return <div className="select-bg"><ImageSelector user={user} dataset={dataset} role={role} onSelect={handleImageSelect} onBack={() => setSelectMode(false)} /></div>;
 
   return (
-    <div className="main-bg">
-      <div className="top-bar">
-        <span>用户: <b>{user}</b> ({role})</span>
-        <div className="logo-container">
-          <img src="/实验室LOGO.png" alt="实验室LOGO" className="logo" />
-          <img src="/JNU-LOGO.jpg" alt="学校LOGO" className="logo" />
+    <div className="app-container">
+      {/* 页面背景LOGO */}
+      <div className="page-logos">
+        <div className="logo-left">
+          <img src="/实验室LOGO.png" alt="实验室LOGO" className="page-logo" />
         </div>
-        <button className="btn logout" onClick={handleLogout}>退出</button>
+        <div className="logo-right">
+          <img src="/JNU-LOGO.jpg" alt="学校LOGO" className="page-logo" />
+        </div>
       </div>
-      <Annotate 
-        user={user} 
-        dataset={dataset} 
-        role={role}
-        onDone={handleAnnotationDone} 
-        imageIdInit={selectedImageId}
-        onSelectMode={() => setSelectMode(true)}
-      />
-      <div className="export-bar">
-        <Export />
-        <button className="btn" onClick={() => setSelectMode(true)}>选择图片/修改标注</button>
+      
+      <div className="main-bg">
+        <div className="top-bar">
+          <span>用户: <b>{user}</b> ({role})</span>
+          <span className="app-title">医学图像标注系统</span>
+          <button className="btn logout" onClick={handleLogout}>退出</button>
+        </div>
+        <Annotate 
+          user={user} 
+          dataset={dataset} 
+          role={role}
+          onDone={handleAnnotationDone} 
+          imageIdInit={selectedImageId}
+          onSelectMode={() => setSelectMode(true)}
+        />
+        <div className="export-bar">
+          <Export />
+          <button className="btn" onClick={() => setSelectMode(true)}>选择图片/修改标注</button>
+        </div>
       </div>
     </div>
   );
@@ -735,7 +744,60 @@ body {
   color: #2c3e50;
   font-weight: 400;
 }
+
+.app-container {
+  position: relative;
+  min-height: 100vh;
+}
+
+.page-logos {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.logo-left {
+  position: absolute;
+  top: 50px;
+  left: 60px;
+  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+  padding: 15px;
+  border-radius: 25px;
+  box-shadow: 0 8px 25px rgba(52, 152, 219, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+}
+
+.logo-right {
+  position: absolute;
+  top: 50px;
+  right: 60px;
+  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+  padding: 15px;
+  border-radius: 25px;
+  box-shadow: 0 8px 25px rgba(52, 152, 219, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+}
+
+.page-logo {
+  width: 140px;
+  height: 140px;
+  object-fit: contain;
+  border-radius: 16px;
+}
+
 .main-bg {
+  position: relative;
+  z-index: 2;
   max-width: 720px;
   margin: 64px auto 0 auto;
   background: rgba(255,255,255,0.98);
@@ -744,32 +806,29 @@ body {
   padding: 56px 56px 40px 56px;
   min-height: 520px;
 }
+
 .top-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 36px;
+}
+
+.app-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #2c3e50;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
   border-bottom: 1.5px solid #e6e6e6;
   padding-bottom: 16px;
   font-size: 17px;
   position: relative;
   font-weight: 500;
   color: #34495e;
-}
-.logo-container {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-}
-.logo {
-  width: 64px;
-  height: 64px;
-  object-fit: contain;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
-  border: 1.5px solid #c7d2fe;
-  padding: 8px;
-  box-shadow: 0 3px 10px rgba(22, 119, 255, 0.18);
 }
 .logo-divider {
   color: #c7d2fe;
