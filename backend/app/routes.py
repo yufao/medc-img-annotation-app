@@ -1554,6 +1554,29 @@ def admin_datasets_page():
 # 标签管理 API
 # =========================
 
+
+@bp.route('/api/initialize_labels', methods=['POST'])
+def initialize_labels():
+    data = request.json
+    dataset_id = data.get('dataset_id')
+    labels = data.get('labels', [])
+    
+    # 删除现有标签（如有）
+    db.labels.delete_many({"dataset_id": dataset_id})
+    
+    # 插入新标签
+    for i, label in enumerate(labels):
+        db.labels.insert_one({
+            "id": i + 1,
+            "dataset_id": dataset_id,
+            "name": label["name"],
+            "color": label.get("color", "#" + ''.join([random.choice('0123456789ABCDEF') for _ in range(6)])),
+            "description": label.get("description", "")
+        })
+    
+    return jsonify({"success": True, "message": f"已为数据集 {dataset_id} 初始化 {len(labels)} 个标签"})
+
+
 @bp.route('/api/admin/labels/<int:dataset_id>', methods=['GET'])
 def get_dataset_labels(dataset_id):
     """获取数据集的标签列表"""

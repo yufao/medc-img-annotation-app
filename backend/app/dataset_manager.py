@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import logging
 import uuid
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -329,9 +330,9 @@ class DatasetManager:
             logger.error(f"创建/更新数据集元数据失败 {code}: {e}")
             return False
     
-    def create_dataset_labels(self, dataset_id: int, labels: List[Dict], db) -> bool:
+    def create_dataset_labels(self, dataset_id, labels, database=None):
         """
-        为数据集创建标签
+        创建或更新数据集标签
         
         Args:
             dataset_id: 数据集ID
@@ -341,38 +342,29 @@ class DatasetManager:
             bool: 是否创建成功
         """
         try:
+            # 使用传入的数据库连接或全局连接
+            db_conn = database if database else db
+        
+            # 首先删除现有标签
+            db_conn.labels.delete_many({"dataset_id": dataset_id})
+        
+            # 插入新标签
             created_labels = []
             for i, label_info in enumerate(labels):
                 label_doc = {
-                    "label_id": i + 1,
+                    "id": i + 1,
                     "dataset_id": dataset_id,
-                    "name": label_info.get("name", f"标签{i+1}"),
-                    "description": label_info.get("description", ""),
-                    "active": True,
-                    "created_at": datetime.now().isoformat()
+                    "name": label_info["name"],
+                    "color": label_info.get("color", "#" + ''.join([random.choice('0123456789ABCDEF') for _ in range(6)])),
+                    "description": label_info.get("description", "")
                 }
-                
-                # 保存到MongoDB
-                try:
-                    db.labels.insert_one(label_doc.copy())
-                except Exception:
-                    # MongoDB失败时保存到内存
-                    pass
-                
-                # 保存到内存结构
-                memory_label = {
-                    "label_id": i + 1,
-                    "dataset_id": dataset_id,
-                    "name": label_info.get("name", f"标签{i+1}")
-                }
-                LABELS.append(memory_label)
-                created_labels.append(memory_label)
+                db_conn.labels.insert_one(label_doc)
+                created_labels.append(label_doc)
             
-            logger.info(f"为数据集 {dataset_id} 创建 {len(created_labels)} 个标签")
             return True
-            
+    
         except Exception as e:
-            logger.error(f"创建数据集标签失败 {dataset_id}: {e}")
+            print(f"创建标签时出错: {str(e)}")
             return False
     
     def get_dataset_labels(self, dataset_id: int) -> List[Dict]:
