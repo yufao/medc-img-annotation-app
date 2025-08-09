@@ -7,6 +7,7 @@ import json
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ class DatasetManager:
         Returns:
             Dict: 数据集字典 {dataset_code: dataset_info}
         """
+        #避免重复扫描
+        if not force_refresh and self.datasets_cache:
+            return self.datasets_cache
+        
         current_time = datetime.now()
         
         # 如果缓存有效且不强制刷新，直接返回缓存
@@ -234,9 +239,9 @@ class DatasetManager:
         Returns:
             int: 全局图片ID
         """
-        # 使用简单的组合算法：dataset_id * 10000 + seq_in_dataset
-        # 这样可以保证不同数据集的图片ID不冲突，同时保持一定的可读性
-        return dataset_id * 10000 + seq_in_dataset
+        
+
+        return int(uuid.uuid4().int & (1<<64)-1 )  # 使用UUID生成一个较大的唯一整数
     
     def get_dataset_by_id(self, dataset_id: int) -> Optional[Dict]:
         """根据数据集ID获取数据集信息"""
@@ -324,7 +329,7 @@ class DatasetManager:
             logger.error(f"创建/更新数据集元数据失败 {code}: {e}")
             return False
     
-    def create_dataset_labels(self, dataset_id: int, labels: List[Dict]) -> bool:
+    def create_dataset_labels(self, dataset_id: int, labels: List[Dict], db) -> bool:
         """
         为数据集创建标签
         
@@ -336,8 +341,6 @@ class DatasetManager:
             bool: 是否创建成功
         """
         try:
-            from app.routes import db, LABELS  # 动态导入避免循环依赖
-            
             created_labels = []
             for i, label_info in enumerate(labels):
                 label_doc = {
