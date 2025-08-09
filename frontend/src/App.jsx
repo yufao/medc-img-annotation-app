@@ -559,7 +559,7 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
             }}
           >
             <img 
-              src={`/static/img/${img.filename}`} 
+              src={img.url || `/static/${dataset.code}/${img.filename}`} 
               alt={`图片ID: ${img.image_id}`}
               style={{ 
                 transform: `scale(${imageScale}) translate(${imageOffset.x / imageScale}px, ${imageOffset.y / imageScale}px)`,
@@ -690,7 +690,7 @@ function ImageSelector({ user, dataset, role, onSelect, onBack, pageSize = 20 })
       <div style={{maxHeight:500,overflowY:'auto'}}>
         {images.map(img=>(
           <div key={img.image_id} className="image-selector-item">
-            <img src={`/static/img/${img.filename}`} alt={`图片ID: ${img.image_id}`} className="image-selector-thumb" />
+            <img src={img.url || `/static/${dataset.code}/${img.filename}`} alt={`图片ID: ${img.image_id}`} className="image-selector-thumb" />
             <div style={{flex:1}}>
               <div className="image-selector-id">图片 ID: #{img.image_id}</div>
               <div className="image-selector-status">
@@ -772,6 +772,8 @@ body {
   justify-content: center;
   align-items: center;
   pointer-events: auto;
+  transition: transform 0.4s ease, box-shadow 0.4s ease;
+  transform: rotate(-5deg);
 }
 
 .logo-right {
@@ -786,6 +788,18 @@ body {
   justify-content: center;
   align-items: center;
   pointer-events: auto;
+  transition: transform 0.4s ease, box-shadow 0.4s ease;
+  transform: rotate(5deg);
+}
+
+.logo-left:hover {
+  transform: rotate(5deg) scale(1.1);
+  box-shadow: 0 12px 35px rgba(52, 152, 219, 0.6);
+}
+
+.logo-right:hover {
+  transform: rotate(-5deg) scale(1.1);
+  box-shadow: 0 12px 35px rgba(52, 152, 219, 0.6);
 }
 
 .page-logo {

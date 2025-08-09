@@ -58,7 +58,6 @@ class DatasetManager:
             return self.datasets_cache
         
         datasets = {}
-        dataset_id = 1
         
         try:
             if not os.path.exists(self.static_root):
@@ -74,17 +73,18 @@ class DatasetManager:
                     continue
                 
                 dataset_code = item
-                dataset_info = self._analyze_dataset_folder(dataset_code, item_path, dataset_id)
+                # 注意：这里不再传递dataset_id，因为它会在_analyze_dataset_folder内部从元数据中读取
+                dataset_info = self._analyze_dataset_folder(dataset_code, item_path)
                 
                 if dataset_info:
                     datasets[dataset_code] = dataset_info
-                    dataset_id += 1
-                    logger.info(f"发现数据集: {dataset_code} -> {dataset_info['name']}")
+                    logger.info(f"发现数据集: {dataset_code} -> {dataset_info['name']} (ID: {dataset_info['id']})")
             
             # 特殊处理：如果只有img目录，创建默认数据集
             img_path = os.path.join(self.static_root, 'img')
             if os.path.exists(img_path) and os.path.isdir(img_path) and not datasets:
-                default_dataset = self._analyze_dataset_folder('DEFAULT', img_path, 1)
+                # 为默认数据集分配一个固定的高ID，避免与用户数据集冲突
+                default_dataset = self._analyze_dataset_folder('DEFAULT', img_path, default_id=9999)
                 if default_dataset:
                     default_dataset['code'] = 'DEFAULT'
                     default_dataset['name'] = '默认数据集'
@@ -101,28 +101,36 @@ class DatasetManager:
         logger.info(f"数据集扫描完成，共发现 {len(datasets)} 个数据集")
         return datasets
     
-    def _analyze_dataset_folder(self, code: str, folder_path: str, dataset_id: int) -> Optional[Dict]:
+    def _analyze_dataset_folder(self, code: str, folder_path: str, default_id: int = None) -> Optional[Dict]:
         """
-        分析数据集文件夹，提取图片和元数据
-        
-        Args:
-            code: 数据集代码
-            folder_path: 文件夹路径
-            dataset_id: 数据集ID
-            
-        Returns:
-            Dict: 数据集信息
+        分析数据集文件夹，提取图片和元数据。
+        新逻辑：优先从元数据文件中读取固定的dataset_id，如果没有则生成新的唯一ID。
         """
         try:
-            # 读取元数据文件（如果存在）
             metadata_path = os.path.join(folder_path, self.metadata_filename)
             metadata = {}
-            if os.path.exists(metadata_path):
+            has_metadata = os.path.exists(metadata_path)
+
+            if has_metadata:
                 try:
                     with open(metadata_path, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                 except Exception as e:
                     logger.warning(f"读取元数据文件失败 {metadata_path}: {e}")
+            
+            # 获取或生成dataset_id
+            dataset_id = None
+            if 'dataset_id' in metadata:
+                # 从元数据中读取已存储的ID
+                dataset_id = metadata['dataset_id']
+                logger.info(f"从元数据中读取数据集ID: {code} -> {dataset_id}")
+            else:
+                # 生成新的唯一ID
+                if default_id is not None:
+                    dataset_id = default_id
+                else:
+                    dataset_id = self._generate_unique_dataset_id()
+                    logger.info(f"为数据集 {code} 生成新的唯一ID: {dataset_id}")
             
             # 扫描图片文件
             images = []
@@ -134,10 +142,8 @@ class DatasetManager:
                 
                 file_path = os.path.join(folder_path, filename)
                 if os.path.isfile(file_path):
-                    # 检查是否为图片文件
                     _, ext = os.path.splitext(filename.lower())
                     if ext in self.image_extensions:
-                        # 生成图片信息
                         image_info = {
                             'image_id': self._generate_image_id(dataset_id, seq_counter),
                             'dataset_id': dataset_id,
@@ -145,13 +151,15 @@ class DatasetManager:
                             'seq_in_dataset': seq_counter,
                             'display_id': f"{code}-{seq_counter:04d}",
                             'file_size': os.path.getsize(file_path),
-                            'created_at': datetime.fromtimestamp(os.path.getctime(file_path)).isoformat()
+                            'created_at': datetime.fromtimestamp(os.path.getctime(file_path)).isoformat(),
+                            'url': f"/static/{code}/{filename}"  # 添加完整的图片URL
                         }
                         images.append(image_info)
                         seq_counter += 1
             
-            if not images:
-                logger.warning(f"数据集文件夹 {folder_path} 中未找到图片文件")
+            # 核心逻辑修改：如果存在元数据文件，即使没有图片，也视为有效数据集
+            if not has_metadata and not images:
+                logger.warning(f"跳过空目录且无元数据文件的文件夹: {folder_path}")
                 return None
             
             # 构建数据集信息
@@ -178,6 +186,42 @@ class DatasetManager:
         except Exception as e:
             logger.error(f"分析数据集文件夹失败 {folder_path}: {e}")
             return None
+    
+    def _generate_unique_dataset_id(self) -> int:
+        """
+        生成全局唯一的数据集ID
+        
+        Returns:
+            int: 新的唯一数据集ID
+        """
+        # 扫描当前所有数据集，找到最大的ID
+        max_id = 0
+        try:
+            # 检查当前缓存中的所有数据集
+            for dataset in self.datasets_cache.values():
+                if dataset.get('id', 0) > max_id:
+                    max_id = dataset['id']
+            
+            # 还需要检查文件系统中所有的元数据文件，以防有些数据集还没加载到缓存
+            if os.path.exists(self.static_root):
+                for item in os.listdir(self.static_root):
+                    item_path = os.path.join(self.static_root, item)
+                    if os.path.isdir(item_path) and not item.startswith('.') and item != 'img':
+                        metadata_path = os.path.join(item_path, self.metadata_filename)
+                        if os.path.exists(metadata_path):
+                            try:
+                                with open(metadata_path, 'r', encoding='utf-8') as f:
+                                    metadata = json.load(f)
+                                    dataset_id = metadata.get('dataset_id', 0)
+                                    if dataset_id > max_id:
+                                        max_id = dataset_id
+                            except:
+                                pass
+        except Exception as e:
+            logger.warning(f"生成唯一ID时扫描失败: {e}")
+        
+        # 返回比当前最大ID大1的新ID，确保从合理的数字开始
+        return max(max_id + 1, 1000)  # 最小从1000开始，避免与旧的测试数据冲突
     
     def _generate_image_id(self, dataset_id: int, seq_in_dataset: int) -> int:
         """
@@ -220,32 +264,64 @@ class DatasetManager:
     
     def create_dataset_metadata(self, code: str, metadata: Dict) -> bool:
         """
-        为数据集创建元数据文件
+        为数据集创建或更新元数据文件，并直接更新缓存。
+        确保dataset_id被正确分配和持久化存储。
         
         Args:
             code: 数据集代码
             metadata: 元数据字典
             
         Returns:
-            bool: 是否创建成功
+            bool: 是否操作成功
         """
         try:
             dataset_path = os.path.join(self.static_root, code)
             if not os.path.exists(dataset_path):
                 os.makedirs(dataset_path, exist_ok=True)
             
+            # 确保metadata中包含唯一的dataset_id
+            if 'dataset_id' not in metadata:
+                # 如果缓存中已存在该数据集，使用其ID，否则分配新ID
+                existing_dataset = self.datasets_cache.get(code)
+                if existing_dataset:
+                    metadata['dataset_id'] = existing_dataset['id']
+                else:
+                    metadata['dataset_id'] = self._generate_unique_dataset_id()
+                logger.info(f"为数据集 {code} 分配ID: {metadata['dataset_id']}")
+            
             metadata_path = os.path.join(dataset_path, self.metadata_filename)
             with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, ensure_ascii=False, indent=2)
             
-            # 强制刷新缓存
-            self.scan_datasets(force_refresh=True)
-            
-            logger.info(f"创建数据集元数据成功: {code}")
+            # --- 优化：直接更新缓存，避免文件系统延迟 ---
+            dataset_id = metadata['dataset_id']
+
+            # 重新分析文件夹以获取最新信息（特别是图片列表）
+            new_dataset_info = self._analyze_dataset_folder(code, dataset_path)
+
+            # 将新信息或更新后的信息写入缓存
+            if new_dataset_info:
+                self.datasets_cache[code] = new_dataset_info
+                logger.info(f"缓存已直接更新/创建: {code} (ID: {dataset_id})")
+            else:
+                # 如果分析失败，也尝试用基本信息更新缓存
+                self.datasets_cache[code] = {
+                    'id': dataset_id,
+                    'code': code,
+                    'name': metadata.get('name', f'数据集 {code}'),
+                    'description': metadata.get('description', ''),
+                    'folder_path': dataset_path,
+                    'images': [],
+                    'total_images': 0,
+                    'metadata': metadata
+                }
+                logger.warning(f"分析文件夹失败，但仍使用基本信息更新了缓存: {code}")
+
+            logger.info(f"创建/更新数据集元数据成功: {code}")
             return True
             
         except Exception as e:
-            logger.error(f"创建数据集元数据失败 {code}: {e}")
+            logger.error(f"创建/更新数据集元数据失败 {code}: {e}")
             return False
     
     def create_dataset_labels(self, dataset_id: int, labels: List[Dict]) -> bool:
@@ -319,6 +395,18 @@ class DatasetManager:
         except Exception as e:
             logger.error(f"获取数据集标签失败 {dataset_id}: {e}")
             return []
+    
+    def get_label_info(self, dataset_id: int, label_id: int) -> Optional[Dict]:
+        """根据数据集ID和标签ID获取标签信息"""
+        try:
+            labels = self.get_dataset_labels(dataset_id)
+            for label in labels:
+                if label.get('label_id') == label_id:
+                    return label
+            return None
+        except Exception as e:
+            logger.error(f"获取标签信息失败 dataset_id={dataset_id}, label_id={label_id}: {e}")
+            return None
     
     def get_datasets_list(self) -> List[Dict]:
         """获取数据集列表（适用于API返回）"""

@@ -1,0 +1,9 @@
+{
+  "name": "VinDr-CXR部分",
+  "description": "原数据集约18,000张X光片，多标签（28种疾病），多名放射科医生独立标注，CSV文件（image_id、lesion_labels、rad_id等）。部分标签多专家分歧，天然适合PLL。本数据集只摘出100张做测试",
+  "category": "CT",
+  "active": true,
+  "created_at": "2025-08-09T11:45:57.780864",
+  "created_by": "admin",
+  "annotation_collection": "annotations_VinDr-CXR-mini"
+}

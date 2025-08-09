@@ -156,10 +156,9 @@ def get_datasets():
             {"id": 2, "name": "测试数据集2", "description": "CT影像分析"}
         ])
 
-# 获取指定数据集下所有图片及标注（供选择进入和修改）
 @bp.route('/api/images_with_annotations', methods=['POST'])
 def images_with_annotations():
-    """获取数据集图片和标注信息，支持新的编号系统"""
+    """获取数据集图片和标注信息，支持新的编号系统和专属标注集合"""
     data = request.json
     ds_id = data.get('dataset_id')
     expert_id = data.get('expert_id')
@@ -178,73 +177,39 @@ def images_with_annotations():
         
         # 使用新的数据集管理器获取图片信息
         dataset = dataset_manager.get_dataset_by_id(ds_id)
-        if dataset:
-            imgs = dataset['images']
-            current_app.logger.info(f"使用数据集管理器获取图片，数据集 {ds_id}，图片数量: {len(imgs)}")
-        else:
-            # 回退到MongoDB查询
-            imgs = list(db.images.find({'dataset_id': ds_id}, {'_id': 0}))
+        if not dataset:
+            return jsonify({"error": f"数据集 {ds_id} 未找到"}), 404
             
-            # 如果MongoDB中没有图片，使用测试数据
-            if not imgs:
-                if isinstance(ds_id, int):
-                    imgs = [img for img in IMAGES if img['dataset_id'] == ds_id]
-                    # 为测试数据添加新的字段
-                    for i, img in enumerate(imgs):
-                        if 'seq_in_dataset' not in img:
-                            img['seq_in_dataset'] = i + 1
-                        if 'display_id' not in img:
-                            # 生成展示ID（需要数据集代码）
-                            dataset_code = f"D{ds_id:02d}"  # 简单的代码生成
-                            img['display_id'] = f"{dataset_code}-{img['seq_in_dataset']:04d}"
-                else:
-                    imgs = []
-                current_app.logger.info(f"使用测试图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
-            else:
-                # 为MongoDB中的图片数据添加缺失字段
-                for i, img in enumerate(imgs):
-                    if 'image_id' not in img:
-                        img['image_id'] = i + 1
-                    if 'seq_in_dataset' not in img:
-                        img['seq_in_dataset'] = i + 1
-                    if 'display_id' not in img:
-                        dataset_code = f"D{ds_id:02d}"
-                        img['display_id'] = f"{dataset_code}-{img['seq_in_dataset']:04d}"
-                current_app.logger.info(f"使用MongoDB图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
+        imgs = dataset['images']
+        current_app.logger.info(f"使用数据集管理器获取图片，数据集 {ds_id}，图片数量: {len(imgs)}")
             
+        # 获取该数据集专属的标注集合
+        annotation_collection = get_annotation_collection(ds_id)
+        
         # 获取该角色的所有标注
-        annotations = list(db.annotations.find({
-            'dataset_id': ds_id, 
+        annotations = list(annotation_collection.find({
             'expert_id': actual_expert_id
         }, {'_id': 0}))
         
-        # 如果MongoDB中没有标注，使用内存数据
-        if not annotations:
-            if isinstance(ds_id, int):
-                annotations = [a for a in ANNOTATIONS if a['dataset_id'] == ds_id and a['expert_id'] == actual_expert_id]
-            else:
-                annotations = []
-        
-        current_app.logger.info(f"数据集 {ds_id}，角色 {role}，图片 {len(imgs)} 张，标注 {len(annotations)} 条")
+        current_app.logger.info(f"从集合 '{annotation_collection.name}' 获取角色 {role} 的标注 {len(annotations)} 条")
         
         # 合并图片和标注信息
         result = []
         for img in imgs:
+            # 在Python端进行匹配
             ann = next((a for a in annotations if a['image_id'] == img['image_id']), None)
             
             # 如果有标注，添加标签名称
             if ann:
-                # 查找标签名称，支持字符串和整数dataset_id
-                label_info = None
-                if isinstance(ds_id, int):
-                    label_info = next((l for l in LABELS if l['label_id'] == ann.get('label') and l['dataset_id'] == ds_id), None)
-                # 对于字符串ds_id，暂时跳过标签名称查找
+                label_info = dataset_manager.get_label_info(ds_id, ann.get('label_id'))
                 if label_info:
                     ann['label_name'] = label_info['name']
             
             img_data = {
                 "image_id": img['image_id'], 
-                "filename": img['filename'], 
+                "display_id": img.get('display_id', ''),
+                "filename": img['filename'],
+                "url": img.get('url', f"/static/{dataset['code']}/{img['filename']}"),  # 确保包含完整URL
                 "annotation": ann
             }
             
@@ -363,12 +328,13 @@ def prev_image():
     
 @bp.route('/api/labels', methods=['GET'])
 def get_labels():
-    # 获取标签列表接口
+    # 获取标签列表接口 - 重构以支持正确的数据集-标签对应关系
     ds_id = request.args.get('dataset_id')
     
     if not ds_id:
-        # 如果没有提供dataset_id，返回所有标签
-        return jsonify(LABELS)
+        # 如果没有提供dataset_id，返回空数组而不是所有标签
+        current_app.logger.warning("获取标签时未提供dataset_id参数")
+        return jsonify([])
     
     try:
         # 处理dataset_id，支持字符串和整数
@@ -376,45 +342,23 @@ def get_labels():
         if isinstance(ds_id, str) and ds_id.isdigit():
             processed_ds_id = int(ds_id)
         
-        # 尝试从MongoDB获取
-        labels_data = list(db.labels.find({"dataset_id": processed_ds_id}, {"_id": 0}))
+        # 使用数据集管理器获取标签
+        labels_data = dataset_manager.get_dataset_labels(processed_ds_id)
         
         if labels_data:
-            # 按label_id排序确保顺序一致
-            labels_data.sort(key=lambda x: x.get('label_id', 0))
+            current_app.logger.info(f"成功获取数据集 {processed_ds_id} 的标签: {len(labels_data)} 个")
             return jsonify(labels_data)
         else:
-            # 备用数据 - 从内存中过滤该数据集的标签
-            current_app.logger.info(f"数据集 {processed_ds_id} 标签未找到，使用备用数据")
-            
-            # 对于整数dataset_id，查找匹配的标签
-            if isinstance(processed_ds_id, int):
-                backup_labels = [l for l in LABELS if l['dataset_id'] == processed_ds_id]
-                if backup_labels:
-                    backup_labels.sort(key=lambda x: x.get('label_id', 0))
-                    return jsonify(backup_labels)
-            
-            # 默认标签（适用于字符串dataset_id或找不到匹配标签的情况）
-            return jsonify([
-                {"dataset_id": processed_ds_id, "label_id": 1, "name": "正常"},
-                {"dataset_id": processed_ds_id, "label_id": 2, "name": "异常"}
-            ])
+            current_app.logger.warning(f"数据集 {processed_ds_id} 没有找到任何标签")
+            return jsonify([])
     
     except Exception as e:
-        current_app.logger.error(f"获取标签失败: {e}")
-        # 返回默认标签
-        processed_ds_id = ds_id
-        if isinstance(ds_id, str) and ds_id.isdigit():
-            processed_ds_id = int(ds_id)
-        
-        return jsonify([
-            {"dataset_id": processed_ds_id, "label_id": 1, "name": "正常"},
-            {"dataset_id": processed_ds_id, "label_id": 2, "name": "异常"}
-        ])
+        current_app.logger.error(f"获取数据集 {ds_id} 标签失败: {e}")
+        return jsonify([])
 
 @bp.route('/api/next_image', methods=['POST'])
 def next_image():
-    # 获取下一个待标注图片接口（基于角色的独立进度）
+    # 获取下一个待标注图片接口（基于角色的独立进度）- 修复版本
     data = request.json
     ds_id = data.get('dataset_id')
     expert_id = data.get('expert_id')
@@ -429,44 +373,34 @@ def next_image():
         if isinstance(ds_id, str) and ds_id.isdigit():
             processed_ds_id = int(ds_id)
         
-        # 从MongoDB获取该数据集下所有图片
-        imgs = list(db.images.find({'dataset_id': processed_ds_id}, {'_id': 0}))
+        # 使用数据集管理器获取图片信息
+        dataset = dataset_manager.get_dataset_by_id(processed_ds_id)
+        if not dataset:
+            return jsonify({"msg": "error", "error": f"数据集 {processed_ds_id} 未找到"})
         
-        # 如果MongoDB中没有图片，使用测试数据
-        if not imgs:
-            if isinstance(processed_ds_id, int):
-                imgs = [img for img in IMAGES if img['dataset_id'] == processed_ds_id]
-            else:
-                imgs = []  # 字符串dataset_id在测试数据中找不到匹配项
-        else:
-            # 为MongoDB中的图片数据添加缺失的image_id字段
-            for i, img in enumerate(imgs):
-                if 'image_id' not in img:
-                    img['image_id'] = i + 1  # 生成一个简单的image_id
+        imgs = dataset['images']
+        
+        # 获取该数据集专属的标注集合
+        annotation_collection = get_annotation_collection(processed_ds_id)
         
         # 获取该角色已标注的图片ID
-        annotated_imgs = list(db.annotations.find({
-            'dataset_id': processed_ds_id, 
+        annotated_imgs = list(annotation_collection.find({
             'expert_id': actual_expert_id
         }, {'_id': 0, 'image_id': 1}))
         
-        # 如果MongoDB中没有标注，使用内存数据
-        if not annotated_imgs:
-            if isinstance(processed_ds_id, int):
-                annotated_imgs = [{'image_id': a.get('image_id')} for a in ANNOTATIONS 
-                                if a.get('dataset_id') == processed_ds_id and a.get('expert_id') == actual_expert_id]
-            else:
-                annotated_imgs = []
-        
         done_img_ids = set([a['image_id'] for a in annotated_imgs])
         
-        current_app.logger.info(f"数据集{processed_ds_id}，角色{role}，总图片{len(imgs)}张，已标注图片ID: {sorted(done_img_ids)}")
+        current_app.logger.info(f"数据集 {processed_ds_id}，角色 {role}，总图片 {len(imgs)} 张，已标注图片ID: {sorted(done_img_ids)}")
         
         # 返回第一个未标注的图片
         for img in sorted(imgs, key=lambda x: x['image_id']):
             if img['image_id'] not in done_img_ids:
-                current_app.logger.info(f"角色 {role} 的下一张图片: static/img/{img['filename']} (image_id: {img['image_id']})")
-                return jsonify({"image_id": img['image_id'], "filename": img['filename']})
+                current_app.logger.info(f"角色 {role} 的下一张图片: {img['url']} (image_id: {img['image_id']})")
+                return jsonify({
+                    "image_id": img['image_id'], 
+                    "filename": img['filename'],
+                    "url": img.get('url', f"/static/{dataset['code']}/{img['filename']}")
+                })
         
         # 全部标注完成
         current_app.logger.info(f"角色 {role} 已完成数据集 {processed_ds_id} 的所有标注")
@@ -474,7 +408,18 @@ def next_image():
         
     except Exception as e:
         current_app.logger.error(f"获取下一张图片失败: {e}")
-        return jsonify({"msg": "error"})
+        return jsonify({"msg": "error", "error": str(e)})
+
+def get_annotation_collection(dataset_id):
+    """根据数据集ID获取其专属的MongoDB Collection对象"""
+    dataset = dataset_manager.get_dataset_by_id(dataset_id)
+    if dataset and 'metadata' in dataset and 'annotation_collection' in dataset['metadata']:
+        collection_name = dataset['metadata']['annotation_collection']
+        return db[collection_name]
+    
+    # 备用方案：如果元数据中没有，则使用旧的全局annotations集合
+    current_app.logger.warning(f"数据集 {dataset_id} 未找到专属标注集合，将使用全局 'annotations' 集合。")
+    return db.annotations
 
 @bp.route('/api/annotate', methods=['POST'])
 def annotate():
@@ -501,9 +446,11 @@ def annotate():
     actual_expert_id = ROLE_TO_EXPERT_ID.get(user_role, 2) if user_role else 2
     
     try:
+        # 获取该数据集专属的标注集合
+        annotation_collection = get_annotation_collection(processed_ds_id)
+
         # 检查是否已经存在该记录
-        existing = db.annotations.find_one({
-            'dataset_id': processed_ds_id,
+        existing = annotation_collection.find_one({
             'image_id': image_id,
             'expert_id': actual_expert_id
         })
@@ -521,71 +468,38 @@ def annotate():
             # 更新现有标注，不需要生成新的record_id
             annotation_data["record_id"] = existing.get("record_id")  # 保持原有的record_id
             
-            db.annotations.update_one(
-                {
-                    'dataset_id': processed_ds_id,
-                    'image_id': image_id,
-                    'expert_id': actual_expert_id
-                },
+            annotation_collection.update_one(
+                {'image_id': image_id, 'expert_id': actual_expert_id},
                 {"$set": annotation_data}
             )
-            current_app.logger.info(f"更新标注: 角色{user_role}, 图片{image_id}, 标签{label}")
+            current_app.logger.info(f"更新标注: 集合 '{annotation_collection.name}', 角色 {user_role}, 图片 {image_id}, 标签 {label}")
         else:
             # 插入新标注，使用自增序列生成唯一的record_id
             try:
+                # 注意：get_next_annotation_id现在可能需要针对不同集合进行管理
+                # 为简化，我们暂时继续使用全局计数器，但在大型系统中可能需要调整
                 next_record_id = get_next_annotation_id(db)
                 annotation_data["record_id"] = next_record_id
                 
-                db.annotations.insert_one(annotation_data)
-                current_app.logger.info(f"新增标注: 角色{user_role}, 图片{image_id}, 标签{label}, record_id{next_record_id}")
+                annotation_collection.insert_one(annotation_data)
+                current_app.logger.info(f"新增标注: 集合 '{annotation_collection.name}', 角色 {user_role}, 图片 {image_id}, 标签 {label}, record_id {next_record_id}")
                 
             except Exception as insert_error:
-                current_app.logger.error(f"保存标注失败: {insert_error}")
+                current_app.logger.error(f"保存标注到集合 '{annotation_collection.name}' 失败: {insert_error}")
                 return jsonify({"msg": "error", "error": str(insert_error)}), 500
         
-        # 同时更新内存数据（用于备用）
-        # 移除旧的标注记录
-        ANNOTATIONS[:] = [a for a in ANNOTATIONS if not (
-            a.get('dataset_id') == processed_ds_id and 
-            a.get('image_id') == image_id and 
-            a.get('expert_id') == actual_expert_id
-        )]
-        # 添加新的标注记录（统一字段名）
-        memory_annotation = annotation_data.copy()
-        memory_annotation['label'] = label  # 为了向后兼容，同时保留label字段
-        ANNOTATIONS.append(memory_annotation)
+        # (可选) 更新内存数据（用于备用），但这部分逻辑在多集合模式下会变得复杂且不准确
+        # 建议未来逐步废弃内存备用方案
         
         return jsonify({"msg": "saved", "expert_id": actual_expert_id})
         
     except Exception as e:
         current_app.logger.error(f"保存标注失败: {e}")
-        # 备用方案：直接存储到内存
-        try:
-            # 生成简单的record_id用于内存存储
-            max_memory_id = max([a.get('record_id', 0) for a in ANNOTATIONS], default=0)
-            annotation_data["record_id"] = max_memory_id + 1
-            
-            # 移除旧记录
-            ANNOTATIONS[:] = [a for a in ANNOTATIONS if not (
-                a.get('dataset_id') == processed_ds_id and 
-                a.get('image_id') == image_id and 
-                a.get('expert_id') == actual_expert_id
-            )]
-            
-            # 添加新记录（保持向后兼容）
-            memory_annotation = annotation_data.copy()
-            memory_annotation['label'] = label
-            ANNOTATIONS.append(memory_annotation)
-            
-            current_app.logger.info(f"备用存储成功: 角色{user_role}, 图片{image_id}, 标签{label}")
-            return jsonify({"msg": "saved"})
-        except Exception as fallback_error:
-            current_app.logger.error(f"备用存储也失败: {fallback_error}")
-            return jsonify({"msg": "error", "error": str(e)})
+        return jsonify({"msg": "error", "error": str(e)})
 
 @bp.route('/api/update_annotation', methods=['POST'])
 def update_annotation():
-    # 修改标注接口（支持基于角色的独立标注）
+    # 修改标注接口（支持基于角色的独立标注）- 修复版本，使用专属集合
     data = request.json
     ds_id = data.get('dataset_id')
     image_id = data.get('image_id')
@@ -606,37 +520,30 @@ def update_annotation():
     actual_expert_id = ROLE_TO_EXPERT_ID.get(user_role, 2) if user_role else 2
     
     update_fields = {
-        'label': data.get('label'),
+        'label_id': data.get('label'),  # 统一使用label_id
         'tip': data.get('tip', ''),
         'datetime': datetime.now().isoformat()
     }
     
     try:
-        # 更新MongoDB中的数据
-        result = db.annotations.update_one({
-            "dataset_id": processed_ds_id, 
+        # 获取该数据集专属的标注集合
+        annotation_collection = get_annotation_collection(processed_ds_id)
+        
+        # 更新专属集合中的数据
+        result = annotation_collection.update_one({
             "image_id": image_id, 
             "expert_id": actual_expert_id
         }, {"$set": update_fields})
         
-        # 同时更新内存数据
-        for ann in ANNOTATIONS:
-            if (ann['dataset_id'] == processed_ds_id and 
-                ann['image_id'] == image_id and 
-                ann['expert_id'] == actual_expert_id):
-                ann.update(update_fields)
-                break
-        
-        if result.modified_count or any(a['dataset_id'] == processed_ds_id and a['image_id'] == image_id 
-                                       and a['expert_id'] == actual_expert_id for a in ANNOTATIONS):
-            current_app.logger.info(f"更新标注成功: 角色{user_role}, 图片{image_id}")
+        if result.modified_count > 0:
+            current_app.logger.info(f"更新标注成功: 集合 '{annotation_collection.name}', 角色 {user_role}, 图片 {image_id}")
             return jsonify({"msg": "updated"})
         else:
             return jsonify({"msg": "not found or not changed"})
             
     except Exception as e:
         current_app.logger.error(f"更新标注失败: {e}")
-        return jsonify({"msg": "error"})
+        return jsonify({"msg": "error", "error": str(e)})
 
 @bp.route('/api/export', methods=['GET'])
 def export():
@@ -963,7 +870,7 @@ def export_excel(ds_id):
 
 @bp.route('/api/export_dataset', methods=['GET'])
 def export_dataset():
-    """导出单个数据集的Excel文件（新版本，支持智能编号）"""
+    """导出单个数据集的Excel文件（修复版本，使用专属标注集合）"""
     dataset_id = request.args.get('dataset_id')
     
     if not dataset_id:
@@ -972,16 +879,76 @@ def export_dataset():
     try:
         dataset_id = int(dataset_id)
         
-        # 使用数据集管理器获取导出数据
-        export_data = dataset_manager.get_export_data(dataset_id)
+        # 获取数据集信息
+        dataset = dataset_manager.get_dataset_by_id(dataset_id)
+        if not dataset:
+            return jsonify({"error": f"数据集 {dataset_id} 未找到"}), 404
+        
+        # 获取该数据集专属的标注集合
+        annotation_collection = get_annotation_collection(dataset_id)
+        
+        # 从专属集合中获取所有标注数据
+        annotations_data = list(annotation_collection.find({}, {"_id": 0}))
+        current_app.logger.info(f"从集合 '{annotation_collection.name}' 获取到 {len(annotations_data)} 条标注数据")
+        
+        # 获取标签映射
+        labels_map = {}
+        dataset_labels = dataset_manager.get_dataset_labels(dataset_id)
+        for label in dataset_labels:
+            labels_map[label.get('label_id')] = label.get('name', '未知标签')
+        
+        # 创建导出数据
+        export_data = []
+        for image in dataset['images']:
+            # 查找该图片的标注
+            image_annotations = [a for a in annotations_data if a['image_id'] == image['image_id']]
+            
+            if image_annotations:
+                # 有标注的图片
+                for annotation in image_annotations:
+                    label_name = labels_map.get(annotation.get('label_id'), '未知标签')
+                    export_record = {
+                        'dataset_id': dataset_id,
+                        'dataset_code': dataset['code'],
+                        'dataset_name': dataset['name'],
+                        'image_id': image['image_id'],
+                        'display_id': image.get('display_id', ''),
+                        'seq_in_dataset': image.get('seq_in_dataset', 0),
+                        'filename': image['filename'],
+                        'label_id': annotation.get('label_id'),
+                        'label_name': label_name,
+                        'tip': annotation.get('tip', ''),
+                        'expert_id': annotation.get('expert_id'),
+                        'annotated_at': annotation.get('datetime', ''),
+                        'created_at': image.get('created_at', ''),
+                        'file_size': image.get('file_size', 0)
+                    }
+                    export_data.append(export_record)
+            else:
+                # 未标注的图片
+                export_record = {
+                    'dataset_id': dataset_id,
+                    'dataset_code': dataset['code'],
+                    'dataset_name': dataset['name'],
+                    'image_id': image['image_id'],
+                    'display_id': image.get('display_id', ''),
+                    'seq_in_dataset': image.get('seq_in_dataset', 0),
+                    'filename': image['filename'],
+                    'label_id': None,
+                    'label_name': '未标注',
+                    'tip': '',
+                    'expert_id': None,
+                    'annotated_at': '',
+                    'created_at': image.get('created_at', ''),
+                    'file_size': image.get('file_size', 0)
+                }
+                export_data.append(export_record)
         
         if not export_data:
-            return jsonify({"error": f"数据集 {dataset_id} 未找到或无数据"}), 404
+            return jsonify({"error": f"数据集 {dataset_id} 无数据可导出"}), 404
         
         # 创建Excel文件
         output = BytesIO()
-        
-        # 转换为DataFrame
         df = pd.DataFrame(export_data)
         
         # 字段排序
@@ -1004,10 +971,10 @@ def export_dataset():
         output.seek(0)
         
         # 生成文件名
-        dataset_code = export_data[0]['dataset_code'] if export_data else f"D{dataset_id:02d}"
+        dataset_code = dataset['code']
         filename = f"{dataset_code}_annotations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
-        current_app.logger.info(f"成功导出数据集 {dataset_id}，共 {len(export_data)} 条记录")
+        current_app.logger.info(f"成功导出数据集 {dataset_id} (集合: {annotation_collection.name})，共 {len(export_data)} 条记录")
         
         return send_file(output, 
                         as_attachment=True, 
@@ -1258,7 +1225,11 @@ def admin_update_dataset_metadata(code):
 
 @bp.route('/api/admin/datasets/create', methods=['POST'])
 def admin_create_dataset():
-    """管理员创建新数据集（仅创建目录和元数据）"""
+    """
+    管理员创建新数据集。
+    此操作会创建文件目录、元数据文件，并在数据库中创建专属的标注集合。
+    增加了对孤儿数据库集合的自动清理功能。
+    """
     data = request.json
     expert_id = data.get('expert_id')
     
@@ -1270,12 +1241,11 @@ def admin_create_dataset():
         name = data.get('name', '').strip()
         description = data.get('description', '').strip()
         category = data.get('category', 'general').strip()
-        labels = data.get('labels', [])  # 标签列表
+        labels = data.get('labels', [])
         
         if not code or not name:
             return jsonify({"error": "数据集代码和名称不能为空"}), 400
         
-        # 验证标签列表
         if not labels or not isinstance(labels, list):
             return jsonify({"error": "必须提供至少一个标签"}), 400
         
@@ -1283,53 +1253,79 @@ def admin_create_dataset():
             if not isinstance(label, dict) or not label.get('name', '').strip():
                 return jsonify({"error": f"标签 {i+1} 格式错误或名称为空"}), 400
         
-        # 检查代码是否已存在
-        existing = dataset_manager.get_dataset_by_code(code)
-        if existing:
-            return jsonify({"error": f"数据集代码 {code} 已存在"}), 400
-        
-        # 创建数据集目录
         dataset_path = os.path.join(dataset_manager.static_root, code)
+        metadata_path = os.path.join(dataset_path, dataset_manager.metadata_filename)
+        collection_name = f"annotations_{code}"
+
+        # --- 增强的预检查和自愈逻辑 ---
+        collection_exists = collection_name in db.list_collection_names()
+        metadata_exists = os.path.exists(metadata_path)
+
+        if dataset_manager.get_dataset_by_code(code) and metadata_exists:
+            return jsonify({"error": f"数据集代码 {code} 已完全存在"}), 400
+
+        if collection_exists and not metadata_exists:
+            # 发现孤儿集合，自动清理
+            db.drop_collection(collection_name)
+            current_app.logger.warning(f"发现并已自动删除孤儿数据库集合: {collection_name}")
+
+        # --- 事务性操作开始 ---
         if not os.path.exists(dataset_path):
             os.makedirs(dataset_path, exist_ok=True)
         
-        # 创建元数据
         metadata = {
             'name': name,
             'description': description,
             'category': category,
             'active': True,
             'created_at': datetime.now().isoformat(),
-            'created_by': expert_id
+            'created_by': expert_id,
+            'annotation_collection': collection_name
         }
         
-        success = dataset_manager.create_dataset_metadata(code, metadata)
+        if not dataset_manager.create_dataset_metadata(code, metadata):
+            return jsonify({"error": "创建元数据文件失败"}), 500
+
+        try:
+            collection = db.create_collection(collection_name)
+            collection.create_index(
+                [("image_id", 1), ("expert_id", 1)], 
+                unique=True,
+                name="image_expert_compound_idx"
+            )
+            current_app.logger.info(f"成功创建数据库集合 '{collection_name}' 并设置索引。")
+        except Exception as db_error:
+            if os.path.exists(metadata_path):
+                os.remove(metadata_path)
+            if not os.listdir(dataset_path):
+                os.rmdir(dataset_path)
+            current_app.logger.error(f"创建数据库集合失败，已回滚文件操作: {db_error}")
+            return jsonify({"error": f"数据库操作失败: {db_error}"}), 500
+
+        new_dataset = dataset_manager.get_dataset_by_code(code)
+        if not new_dataset:
+            return jsonify({"error": "数据集创建后无法在缓存中找到"}), 500
+            
+        dataset_id = new_dataset['id']
         
-        if success:
-            # 获取新创建的数据集ID
-            new_dataset = dataset_manager.get_dataset_by_code(code)
-            if new_dataset:
-                dataset_id = new_dataset['id']
-                
-                # 创建标签
-                label_success = dataset_manager.create_dataset_labels(dataset_id, labels)
-                
-                if label_success:
-                    current_app.logger.info(f"管理员 {expert_id} 创建数据集 {code} 及 {len(labels)} 个标签")
-                    return jsonify({
-                        "message": f"数据集 {code} 和标签创建成功，请上传图片文件",
-                        "dataset_id": dataset_id,
-                        "labels_created": len(labels)
-                    })
-                else:
-                    return jsonify({"warning": f"数据集 {code} 创建成功，但标签创建失败"}), 201
-            else:
-                return jsonify({"error": "数据集创建后无法获取ID"}), 500
-        else:
-            return jsonify({"error": "创建失败"}), 500
-    
+        if not dataset_manager.create_dataset_labels(dataset_id, labels):
+            current_app.logger.warning(f"数据集 {code} 已创建，但标签创建失败。")
+            return jsonify({
+                "message": f"数据集 {code} 和数据库集合创建成功，但标签创建失败，请手动添加。",
+                "dataset_id": dataset_id,
+                "collection_created": collection_name
+            }), 201
+
+        current_app.logger.info(f"管理员 {expert_id} 成功创建数据集 {code} (ID: {dataset_id})，包含 {len(labels)} 个标签和数据库集合 '{collection_name}'")
+        return jsonify({
+            "message": f"数据集 {code}、标签和数据库集合已全部成功创建！",
+            "dataset_id": dataset_id,
+            "collection_created": collection_name,
+            "labels_created": len(labels)
+        }), 201
+
     except Exception as e:
-        current_app.logger.error(f"创建数据集失败: {e}")
+        current_app.logger.error(f"创建数据集的未知错误: {e}")
         return jsonify({"error": str(e)}), 500
 
 # ============= 文件上传管理接口 =============
