@@ -109,8 +109,13 @@ ANNOTATIONS = []
 
 bp = Blueprint('api', __name__)
 
-def register_routes(app):
+def register_routes(app,db_conn=None):
     # 注册蓝图，将所有API路由挂载到Flask应用
+    # 如果提供了数据库连接，使用提供的连接
+    global db
+    if db_conn:
+        db = db_conn
+
     app.register_blueprint(bp)
 
 @bp.route('/api/login', methods=['POST'])

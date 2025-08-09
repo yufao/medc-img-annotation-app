@@ -20,9 +20,14 @@ from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
-MONGO_URI = os.getenv('MONGODB_URI', 'mongodb://172.20.48.1:27017/local')
-MONGO_DB = os.getenv('MONGODB_DB', 'local')
-
+try:
+    from config import Config
+    MONGO_URI = os.getenv('MONGODB_URI', Config.MONGODB_URI)
+    MONGO_DB = os.getenv('MONGODB_DB', Config.MONGODB_DB)
+except ImportError:
+    MONGO_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/medc_annotation')
+    MONGO_DB = os.getenv('MONGODB_DB', 'medc_annotation')
+    
 class SequenceGenerator:
     """MongoDB自增序列生成器"""
     

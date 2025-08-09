@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import LabelManager from './LabelManager';
 
 const api = axios.create({ baseURL: '/api' });
+const [showLabelManager, setShowLabelManager] = useState(false);
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -104,6 +106,23 @@ function Login({ onLogin }) {
 function DatasetSelect({ user, onSelect }) {
   const [datasets, setDatasets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedDataset, setSelectedDataset] = useState(null);
+  const [showLabelManager, setShowLabelManager] = useState(false);
+
+
+  const handleManageLabels = (dataset) => {
+    setSelectedDataset(dataset);
+    setShowLabelManager(true);
+  };
+
+  const handleLabelManagerClose = () => {
+    setShowLabelManager(false);
+  };
+
+  const handleLabelManagerSuccess = () => {
+    // 标签管理成功后可以重新加载数据集或显示成功消息
+    setShowLabelManager(false);
+  };
 
   useEffect(() => {
     const fetchDatasets = async () => {
@@ -144,16 +163,34 @@ function DatasetSelect({ user, onSelect }) {
       ) : (
         <div className="dataset-btn-group">
           {datasets.map((ds, index) => (
-            <button
-              key={ds.id || ds.name || index} // 使用更安全的 key 生成方式
-              className="dataset-btn"
-              onClick={() => onSelect(ds)}
-            >{ds.name}</button>
+            <div key={ds.id || ds.name || index} className="dataset-item">
+              <button
+                className="dataset-btn"
+                onClick={() => onSelect(ds)}
+              >{ds.name}</button>
+              {user === 'admin' && (
+                <button 
+                  className="btn manage-labels-btn"
+                  onClick={() => handleManageLabels(ds)}
+                >
+                  管理标签
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
+      
+      {showLabelManager && selectedDataset && (
+        <LabelManager
+          dataset={selectedDataset}
+          onClose={handleLabelManagerClose}
+          onSuccess={handleLabelManagerSuccess}
+        />
+      )}
     </div>
   );
+
 }
 
 function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
@@ -1458,3 +1495,120 @@ input[type="password"], input[type="text"] {
 document.head.appendChild(style);
 
 
+const additionalStyle = document.createElement('style');
+additionalStyle.innerHTML = `
+.dataset-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.manage-labels-btn {
+  margin-left: 10px;
+  padding: 8px 12px;
+  font-size: 14px;
+  background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
+}
+
+.label-manager-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.label-manager-modal {
+  background: white;
+  border-radius: 20px;
+  padding: 24px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.3);
+}
+
+.label-input-row {
+  display: flex;
+  margin-bottom: 16px;
+}
+
+.label-input-row .input {
+  flex: 1;
+  margin-right: 8px;
+}
+
+.label-list {
+  margin-top: 20px;
+  border: 1px solid #e6e6e6;
+  border-radius: 8px;
+  padding: 16px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.label-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.label-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: #f3f4f6;
+  border-radius: 4px;
+}
+
+.remove-btn {
+  background: none;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+.btn.secondary {
+  background: #e5e7eb;
+  color: #374151;
+  margin-left: 12px;
+}
+
+.message {
+  padding: 10px;
+  margin-top: 16px;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.no-labels {
+  color: #6b7280;
+  text-align: center;
+  font-style: italic;
+}
+
+.label-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+`;
+document.head.appendChild(additionalStyle);
