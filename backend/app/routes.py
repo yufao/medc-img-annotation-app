@@ -5,20 +5,31 @@ import sys
 import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
-from dotenv import load_dotenv
 from io import BytesIO
+import uuid
+from werkzeug.utils import secure_filename
 
-# 添加后端目录到系统路径，用于导入数据库工具
+# 添加后端目录到系统路径，用于导入数据库工具和配置
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db_utils import get_next_annotation_id
+from config import MONGO_URI, MONGO_DB, UPLOAD_FOLDER, MAX_CONTENT_LENGTH
 
+# 连接MongoDB
+try:
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    client.server_info()  # 测试连接
+    db = client[MONGO_DB]
+    print(f"✅ 数据库连接成功: {MONGO_URI}")
+    print(f"✅ 使用数据库: {MONGO_DB}")
+    USE_DATABASE = True
+except Exception as e:
+    print(f"❌ 数据库连接失败: {e}")
+    print("⚠️ 系统将使用内存模式运行，数据不会持久化")
+    USE_DATABASE = False
+    db = None
 
-# 加载环境变量，连接MongoDB
-load_dotenv()
-MONGO_URI = os.getenv('MONGODB_URI', 'mongodb://172.20.48.1:27017/local')
-MONGO_DB = os.getenv('MONGODB_DB', 'local')
-client = MongoClient(MONGO_URI)
-db = client[MONGO_DB]
+# 确保上传目录存在
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # 静态图片目录说明：
 # 图片文件应放在 backend/app/static/img/ 目录下
@@ -51,54 +62,19 @@ USERS = [
 }
 """
 
-# 图像样本表结构：
-# {
-#     image_id: 图像ID,
-#     dataset_id: 数据集ID,
-#     filename: 文件名
-# }
-IMAGES = [
-    # 数据集1 - 胸片异常检测
-    {"image_id": 1, "dataset_id": 1, "filename": "person1_virus_6.jpeg"},
-    {"image_id": 2, "dataset_id": 1, "filename": "person1_virus_7.jpeg"},
-    {"image_id": 3, "dataset_id": 1, "filename": "person1_virus_8.jpeg"},
-    {"image_id": 4, "dataset_id": 1, "filename": "person1_virus_9.jpeg"},
-    {"image_id": 5, "dataset_id": 1, "filename": "person3_virus_15.jpeg"},
-    {"image_id": 6, "dataset_id": 1, "filename": "person3_virus_16.jpeg"},
-    {"image_id": 7, "dataset_id": 1, "filename": "person3_virus_17.jpeg"},
-    {"image_id": 8, "dataset_id": 1, "filename": "person8_virus_27.jpeg"},
-    {"image_id": 9, "dataset_id": 1, "filename": "person8_virus_28.jpeg"},
-    {"image_id": 10, "dataset_id": 1, "filename": "person10_virus_35.jpeg"},
-    
-    # 数据集2 - CT影像分析  
-    {"image_id": 11, "dataset_id": 2, "filename": "person78_bacteria_378.jpeg"},
-    {"image_id": 12, "dataset_id": 2, "filename": "person78_bacteria_380.jpeg"},
-    {"image_id": 13, "dataset_id": 2, "filename": "person78_bacteria_381.jpeg"},
-    {"image_id": 14, "dataset_id": 2, "filename": "person78_bacteria_382.jpeg"},
-    {"image_id": 15, "dataset_id": 2, "filename": "person80_bacteria_389.jpeg"},
-    {"image_id": 16, "dataset_id": 2, "filename": "person80_bacteria_390.jpeg"},
-    {"image_id": 17, "dataset_id": 2, "filename": "person80_bacteria_391.jpeg"},
-    {"image_id": 18, "dataset_id": 2, "filename": "person80_bacteria_392.jpeg"},
-    {"image_id": 19, "dataset_id": 2, "filename": "person80_bacteria_393.jpeg"},
-    {"image_id": 20, "dataset_id": 2, "filename": "person78_bacteria_384.jpeg"}
-]
+# 用户角色到expert_id的映射
+ROLE_TO_EXPERT_ID = {
+    "admin": 0,
+    "doctor": 1, 
+    "student": 2
+}
 
-# 标签字典表结构：
-# {
-#     label_id: 标签ID,
-#     dataset_id: 数据集ID,
-#     name: 标签名称
-# }
-LABELS = [
-    {"label_id": 1, "dataset_id": 1, "name": "正常"},
-    {"label_id": 2, "dataset_id": 1, "name": "异常"},
-    {"label_id": 3, "dataset_id": 1, "name": "待定"},
-    {"label_id": 1, "dataset_id": 2, "name": "正常"},
-    {"label_id": 2, "dataset_id": 2, "name": "异常"},
-    {"label_id": 3, "dataset_id": 2, "name": "待定"}
+# 用户依然用mock（用于登录验证）
+USERS = [
+    {"username": "admin", "password": "admin123", "role": "admin"},
+    {"username": "doctor", "password": "doctor123", "role": "doctor"},
+    {"username": "student", "password": "student123", "role": "student"},
 ]
-
-ANNOTATIONS = []
 
 bp = Blueprint('api', __name__)
 
@@ -117,28 +93,242 @@ def login():
 
 @bp.route('/api/datasets', methods=['GET'])
 def get_datasets():
-    # 获取所有数据集列表，根据用户角色返回可访问的数据集
+    """获取所有数据集列表"""
     user_id = request.args.get('user_id')
     
-    # 从MongoDB获取数据集
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
     try:
-        datasets = list(db.datasets.find({}, {'_id': 0, 'id': 1, 'name': 1, 'description': 1}))
-        
-        # 如果没有数据集，返回测试数据集
-        if not datasets:
-            datasets = [
-                {"id": 1, "name": "测试数据集1", "description": "胸片异常检测"},
-                {"id": 2, "name": "测试数据集2", "description": "CT影像分析"}
-            ]
-        
+        datasets = list(db.datasets.find({}, {'_id': 0}))
+        current_app.logger.info(f"获取到 {len(datasets)} 个数据集")
         return jsonify(datasets)
     except Exception as e:
         current_app.logger.error(f"获取数据集失败: {e}")
-        # 返回默认测试数据集
-        return jsonify([
-            {"id": 1, "name": "测试数据集1", "description": "胸片异常检测"},
-            {"id": 2, "name": "测试数据集2", "description": "CT影像分析"}
-        ])
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+@bp.route('/api/admin/datasets', methods=['POST'])
+def create_dataset():
+    """创建新数据集（仅管理员）"""
+    data = request.json
+    user_role = data.get('role')
+    
+    # 权限验证
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
+    dataset_name = data.get('name')
+    dataset_desc = data.get('description', '')
+    
+    # 验证数据有效性
+    if not dataset_name:
+        return jsonify({"msg": "error", "error": "数据集名称不能为空"}), 400
+    
+    try:
+        # 获取最大数据集ID
+        max_ds = db.datasets.find_one(sort=[("id", -1)])
+        next_id = 1
+        if max_ds:
+            next_id = max_ds.get('id', 0) + 1
+        
+        # 创建数据集记录
+        new_dataset = {
+            "id": next_id,
+            "name": dataset_name, 
+            "description": dataset_desc,
+            "created_at": datetime.now().isoformat(),
+            "image_count": 0,
+            "status": "active"
+        }
+        
+        result = db.datasets.insert_one(new_dataset)
+        current_app.logger.info(f"创建数据集成功: {dataset_name}, ID: {next_id}")
+        return jsonify({"msg": "success", "dataset_id": next_id}), 201
+    except Exception as e:
+        current_app.logger.error(f"创建数据集失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/<int:dataset_id>', methods=['DELETE'])
+def delete_dataset(dataset_id):
+    """删除数据集（仅管理员）"""
+    user_role = request.args.get('role')
+    
+    # 权限验证
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
+    try:
+        # 删除数据集记录
+        db.datasets.delete_one({"id": dataset_id})
+        
+        # 查找并删除相关图片ID
+        image_links = list(db.image_datasets.find({"dataset_id": dataset_id}))
+        image_ids = [link['image_id'] for link in image_links]
+        
+        # 删除数据集-图片关联
+        db.image_datasets.delete_many({"dataset_id": dataset_id})
+        
+        # 删除标注记录
+        db.annotations.delete_many({"dataset_id": dataset_id})
+        
+        # 注意：不删除图片文件和图片记录，因为可能被其他数据集使用
+        
+        current_app.logger.info(f"删除数据集成功: ID {dataset_id}, 涉及 {len(image_ids)} 张图片")
+        return jsonify({"msg": "success", "deleted_images": len(image_ids)}), 200
+    except Exception as e:
+        current_app.logger.error(f"删除数据集失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/<int:dataset_id>/labels', methods=['POST'])
+def add_dataset_labels(dataset_id):
+    """为数据集添加标签（仅管理员）"""
+    data = request.json
+    user_role = data.get('role')
+    
+    # 权限验证
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
+    labels = data.get('labels', [])
+    
+    if not labels:
+        return jsonify({"msg": "error", "error": "标签列表不能为空"}), 400
+    
+    try:
+        # 获取当前最大label_id
+        max_label = db.labels.find_one(sort=[("label_id", -1)])
+        next_id = 1
+        if max_label:
+            next_id = max_label.get('label_id', 0) + 1
+        
+        # 准备插入的标签数据
+        label_records = []
+        for i, label in enumerate(labels):
+            label_records.append({
+                "label_id": next_id + i,
+                "label_name": label.get('name'),
+                "category": label.get('category', '病理学')
+            })
+        
+        # 批量插入标签
+        if label_records:
+            result = db.labels.insert_many(label_records)
+            current_app.logger.info(f"为数据集 {dataset_id} 添加 {len(result.inserted_ids)} 个标签")
+        
+        return jsonify({
+            "msg": "success", 
+            "added_labels": len(label_records),
+            "labels": label_records
+        }), 201
+    except Exception as e:
+        current_app.logger.error(f"添加标签失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+@bp.route('/api/admin/datasets/<int:dataset_id>/images', methods=['POST'])
+def upload_dataset_images(dataset_id):
+    """上传图片到数据集（仅管理员）"""
+    user_role = request.form.get('role')
+    
+    # 权限验证
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
+    # 检查数据集是否存在
+    dataset = db.datasets.find_one({"id": dataset_id})
+    if not dataset:
+        return jsonify({"msg": "error", "error": f"数据集 {dataset_id} 不存在"}), 404
+    
+    if 'images' not in request.files:
+        return jsonify({"msg": "error", "error": "没有上传图片"}), 400
+    
+    files = request.files.getlist('images')
+    
+    if not files or len(files) == 0:
+        return jsonify({"msg": "error", "error": "没有选择图片"}), 400
+    
+    try:
+        # 获取当前最大image_id
+        max_img = db.images.find_one(sort=[("image_id", -1)])
+        next_id = 1
+        if max_img:
+            next_id = max_img.get('image_id', 0) + 1
+        
+        uploaded_images = []
+        failed_images = []
+        
+        for i, file in enumerate(files):
+            if file.filename == '':
+                continue
+            
+            # 生成安全的文件名
+            original_filename = secure_filename(file.filename)
+            # 添加随机字符串避免文件名冲突
+            filename = f"{uuid.uuid4().hex}_{original_filename}"
+            
+            try:
+                # 保存文件
+                file_path = os.path.join(UPLOAD_FOLDER, filename)
+                file.save(file_path)
+                
+                # 记录图片信息
+                image_id = next_id + i
+                image_record = {
+                    "image_id": image_id,
+                    "image_path": f"static/img/{filename}"
+                }
+                
+                # 插入图片记录
+                db.images.insert_one(image_record)
+                
+                # 关联图片和数据集
+                db.image_datasets.insert_one({
+                    "image_id": image_id,
+                    "dataset_id": dataset_id
+                })
+                
+                # 添加到上传成功列表
+                uploaded_images.append({
+                    "image_id": image_id,
+                    "filename": filename,
+                    "original_name": original_filename
+                })
+            except Exception as e:
+                current_app.logger.error(f"上传图片失败: {file.filename}, 错误: {e}")
+                failed_images.append({
+                    "filename": file.filename,
+                    "error": str(e)
+                })
+        
+        # 更新数据集图片计数
+        db.datasets.update_one(
+            {"id": dataset_id},
+            {"$inc": {"image_count": len(uploaded_images)}}
+        )
+        
+        current_app.logger.info(f"数据集 {dataset_id} 上传图片: 成功 {len(uploaded_images)}, 失败 {len(failed_images)}")
+        
+        return jsonify({
+            "msg": "success", 
+            "uploaded": len(uploaded_images),
+            "failed": len(failed_images),
+            "images": uploaded_images,
+            "errors": failed_images
+        }), 201
+    except Exception as e:
+        current_app.logger.error(f"批量上传图片失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
 
 # 获取指定数据集下所有图片及标注（供选择进入和修改）
 @bp.route('/api/images_with_annotations', methods=['POST'])
@@ -151,48 +341,48 @@ def images_with_annotations():
     page = data.get('page', 1)
     page_size = data.get('pageSize', 20)
     
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
     # 根据角色确定实际的expert_id
     actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)  # 默认为student
     
     try:
-        # 确保ds_id正确处理，支持字符串和整数
+        # 确保ds_id正确处理
         if isinstance(ds_id, str) and ds_id.isdigit():
             ds_id = int(ds_id)
-        # 如果ds_id是字符串但不是数字，保持字符串类型
         
-        # 从MongoDB获取该数据集下所有图片
-        imgs = list(db.images.find({'dataset_id': ds_id}, {'_id': 0}))
+        # 从数据集-图片关联表获取该数据集下的图片ID
+        dataset_images = list(db.image_datasets.find(
+            {"dataset_id": ds_id}, 
+            {"_id": 0, "image_id": 1}
+        ))
         
-        # 如果MongoDB中没有图片，使用测试数据
-        if not imgs:
-            # 对于测试数据，需要处理类型匹配
-            if isinstance(ds_id, int):
-                imgs = [img for img in IMAGES if img['dataset_id'] == ds_id]
-            else:
-                # 如果ds_id是字符串，不会在IMAGES中找到匹配项，返回空列表
-                imgs = []
-            current_app.logger.info(f"使用测试图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
-        else:
-            # 为MongoDB中的图片数据添加缺失的image_id字段
-            for i, img in enumerate(imgs):
-                if 'image_id' not in img:
-                    img['image_id'] = i + 1  # 生成一个简单的image_id
-            current_app.logger.info(f"使用MongoDB图片数据，数据集 {ds_id}，图片数量: {len(imgs)}")
-            
-        # 获取该角色的所有标注
+        if not dataset_images:
+            current_app.logger.warning(f"数据集 {ds_id} 中没有图片")
+            return jsonify([])
+        
+        image_ids = [img['image_id'] for img in dataset_images]
+        
+        # 获取图片详细信息
+        imgs = list(db.images.find(
+            {"image_id": {"$in": image_ids}}, 
+            {"_id": 0}
+        ))
+        
+        current_app.logger.info(f"数据集 {ds_id} 中有 {len(imgs)} 张图片")
+        
+        # 获取该角色在此数据集的所有标注
         annotations = list(db.annotations.find({
             'dataset_id': ds_id, 
             'expert_id': actual_expert_id
         }, {'_id': 0}))
         
-        # 如果MongoDB中没有标注，使用内存数据
-        if not annotations:
-            if isinstance(ds_id, int):
-                annotations = [a for a in ANNOTATIONS if a['dataset_id'] == ds_id and a['expert_id'] == actual_expert_id]
-            else:
-                annotations = []
+        current_app.logger.info(f"用户 {role} 在数据集 {ds_id} 中有 {len(annotations)} 条标注")
         
-        current_app.logger.info(f"数据集 {ds_id}，角色 {role}，图片 {len(imgs)} 张，标注 {len(annotations)} 条")
+        # 获取标签信息用于显示标签名称
+        labels = list(db.labels.find({}, {"_id": 0}))
+        labels_dict = {label['label_id']: label.get('label_name', '') for label in labels}
         
         # 合并图片和标注信息
         result = []
@@ -200,18 +390,13 @@ def images_with_annotations():
             ann = next((a for a in annotations if a['image_id'] == img['image_id']), None)
             
             # 如果有标注，添加标签名称
-            if ann:
-                # 查找标签名称，支持字符串和整数dataset_id
-                label_info = None
-                if isinstance(ds_id, int):
-                    label_info = next((l for l in LABELS if l['label_id'] == ann.get('label') and l['dataset_id'] == ds_id), None)
-                # 对于字符串ds_id，暂时跳过标签名称查找
-                if label_info:
-                    ann['label_name'] = label_info['name']
+            if ann and ann.get('label_id'):
+                ann['label_name'] = labels_dict.get(ann['label_id'], '')
             
             img_data = {
                 "image_id": img['image_id'], 
-                "filename": img['filename'], 
+                "filename": img.get('image_path', '').split('/')[-1],  # 从路径中提取文件名
+                "image_path": img.get('image_path', ''),
                 "annotation": ann
             }
             
@@ -238,21 +423,29 @@ def get_dataset_images(dataset_id):
     page = int(request.args.get('page', 1))
     page_size = int(request.args.get('pageSize', 20))
     
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
     # 根据角色确定实际的expert_id
     actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)
     
     try:
-        # 从MongoDB获取图片
-        imgs = list(db.images.find({'dataset_id': dataset_id}, {'_id': 0}))
+        # 从数据集-图片关联表获取该数据集下的图片ID
+        dataset_images = list(db.image_datasets.find(
+            {"dataset_id": dataset_id}, 
+            {"_id": 0, "image_id": 1}
+        ))
         
-        # 如果没有图片，使用测试数据
-        if not imgs:
-            imgs = [img for img in IMAGES if img['dataset_id'] == dataset_id]
-        else:
-            # 为MongoDB中的图片数据添加缺失的image_id字段
-            for i, img in enumerate(imgs):
-                if 'image_id' not in img:
-                    img['image_id'] = i + 1  # 生成一个简单的image_id
+        if not dataset_images:
+            return jsonify([])
+        
+        image_ids = [img['image_id'] for img in dataset_images]
+        
+        # 获取图片详细信息
+        imgs = list(db.images.find(
+            {"image_id": {"$in": image_ids}}, 
+            {"_id": 0}
+        ))
         
         # 获取标注
         annotations = list(db.annotations.find({
@@ -260,22 +453,21 @@ def get_dataset_images(dataset_id):
             'expert_id': actual_expert_id
         }, {'_id': 0}))
         
-        if not annotations:
-            annotations = [a for a in ANNOTATIONS if a['dataset_id'] == dataset_id and a['expert_id'] == actual_expert_id]
+        # 获取标签信息
+        labels = list(db.labels.find({}, {"_id": 0}))
+        labels_dict = {label['label_id']: label.get('label_name', '') for label in labels}
         
         # 合并数据
         result = []
         for img in imgs:
             ann = next((a for a in annotations if a['image_id'] == img['image_id']), None)
-            if ann:
-                # 在对应数据集中查找标签名称
-                label_info = next((l for l in LABELS if l['label_id'] == ann.get('label') and l['dataset_id'] == dataset_id), None)
-                if label_info:
-                    ann['label_name'] = label_info['name']
+            if ann and ann.get('label_id'):
+                ann['label_name'] = labels_dict.get(ann['label_id'], '')
             
             result.append({
                 "image_id": img['image_id'],
-                "filename": img['filename'],
+                "filename": img.get('image_path', '').split('/')[-1],
+                "image_path": img.get('image_path', ''),
                 "annotation": ann
             })
         
@@ -330,21 +522,26 @@ def prev_image():
     
 @bp.route('/api/labels', methods=['GET'])
 def get_labels():
-    # 获取标签列表接口
+    """获取标签列表接口"""
     ds_id = request.args.get('dataset_id')
     
-    if not ds_id:
-        # 如果没有提供dataset_id，返回所有标签
-        return jsonify(LABELS)
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
     
     try:
         # 处理dataset_id，支持字符串和整数
-        processed_ds_id = ds_id
-        if isinstance(ds_id, str) and ds_id.isdigit():
-            processed_ds_id = int(ds_id)
+        if ds_id:
+            processed_ds_id = ds_id
+            if isinstance(ds_id, str) and ds_id.isdigit():
+                processed_ds_id = int(ds_id)
+            
+            # 尝试从MongoDB获取特定数据集的标签
+            labels_data = list(db.labels.find({"dataset_id": processed_ds_id}, {"_id": 0}))
+        else:
+            # 如果没有提供dataset_id，返回所有标签
+            labels_data = list(db.labels.find({}, {"_id": 0}))
         
-        # 尝试从MongoDB获取
-        labels_data = list(db.labels.find({"dataset_id": processed_ds_id}, {"_id": 0}))
+        return jsonify(labels_data)
         
         if labels_data:
             # 按label_id排序确保顺序一致
@@ -607,323 +804,247 @@ def update_annotation():
 
 @bp.route('/api/export', methods=['GET'])
 def export():
-    # 通用导出接口 - 多工作表Excel文件
+    """改进的导出接口 - 按数据集分别导出，支持筛选"""
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
     try:
-        # 获取当前用户和数据集信息
-        expert_id = request.args.get('expert_id')
+        # 获取查询参数
         dataset_id = request.args.get('dataset_id')
+        expert_id = request.args.get('expert_id')
         
+        # 查询用户角色
+        user_role = None
+        if expert_id:
+            for user in USERS:
+                if user['username'] == expert_id:
+                    user_role = user['role']
+                    break
+                    
+        actual_expert_id = ROLE_TO_EXPERT_ID.get(user_role, 2) if user_role else None
+        
+        # 处理dataset_id
+        if dataset_id and dataset_id.isdigit():
+            processed_ds_id = int(dataset_id)
+        else:
+            processed_ds_id = None
+            
         output = BytesIO()
         current_app.logger.info(f"开始导出数据，expert_id: {expert_id}, dataset_id: {dataset_id}")
         
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 1. 导出标注数据表 (annotations)
+            # 构建查询条件
+            query = {}
+            if processed_ds_id is not None:
+                query['dataset_id'] = processed_ds_id
+            if actual_expert_id is not None:
+                query['expert_id'] = actual_expert_id
+                
+            # 1. 导出标注数据
             try:
-                current_app.logger.info("正在导出标注数据...")
-                annotations_data = list(db.annotations.find({}, {"_id": 0}))
+                current_app.logger.info(f"导出标注数据，查询条件: {query}")
+                
+                # 从MongoDB获取符合条件的标注
+                annotations_data = list(db.annotations.find(query, {"_id": 0}))
                 current_app.logger.info(f"从MongoDB获取到 {len(annotations_data)} 条标注数据")
                 
-                if not annotations_data:
-                    # 使用备用内存数据
-                    annotations_data = ANNOTATIONS
-                    current_app.logger.info(f"使用备用内存数据: {len(annotations_data)} 条记录")
-                
                 if annotations_data:
-                    # 处理字段名不一致问题：统一使用 label_id
+                    # 统一标签字段名
                     for item in annotations_data:
                         if 'label' in item and 'label_id' not in item:
                             item['label_id'] = item['label']
-                        item.pop('label', None)  # 移除旧的 label 字段
+                        item.pop('label', None)
                     
-                    # 按照新的字段顺序排列：dataset_id | record_id | image_id | expert_id | label_id | tip | datetime
+                    # 获取标签名称
+                    labels_dict = {}
+                    all_labels = list(db.labels.find({}, {"_id": 0}))
+                        
+                    for label in all_labels:
+                        labels_dict[label.get('label_id')] = label.get('label_name', '')
+                    
+                    # 添加标签名称列
+                    for item in annotations_data:
+                        item['label_name'] = labels_dict.get(item.get('label_id'), '')
+                    
+                    # 按照指定字段顺序排列
                     annotations_df = pd.DataFrame(annotations_data)
-                    column_order = ['dataset_id', 'record_id', 'image_id', 'expert_id', 'label_id', 'tip', 'datetime']
-                    # 只保留存在的列，并按指定顺序排列
+                    column_order = ['dataset_id', 'record_id', 'image_id', 'expert_id', 
+                                   'label_id', 'label_name', 'tip', 'datetime']
                     available_columns = [col for col in column_order if col in annotations_df.columns]
                     annotations_df = annotations_df.reindex(columns=available_columns)
                     
-                    annotations_df.to_excel(writer, sheet_name='annotations', index=False)
+                    # 按数据集和记录ID排序
+                    if 'dataset_id' in annotations_df.columns:
+                        annotations_df = annotations_df.sort_values(['dataset_id', 'record_id'])
+                    
+                    sheet_name = f"标注数据"
+                    if processed_ds_id:
+                        sheet_name = f"数据集{processed_ds_id}标注"
+                    
+                    annotations_df.to_excel(writer, sheet_name=sheet_name, index=False)
                     current_app.logger.info(f"✅ 成功导出标注数据: {len(annotations_df)} 条记录")
                 else:
-                    # 创建空的标注表结构
-                    empty_annotations = pd.DataFrame(columns=['dataset_id', 'record_id', 'image_id', 'expert_id', 'label_id', 'tip', 'datetime'])
-                    empty_annotations.to_excel(writer, sheet_name='annotations', index=False)
-                    current_app.logger.warning("⚠️ 标注数据为空，创建空表结构")
-                    
+                    # 创建空表
+                    empty_annotations = pd.DataFrame(columns=['dataset_id', 'record_id', 'image_id', 
+                                                            'expert_id', 'label_id', 'label_name', 
+                                                            'tip', 'datetime'])
+                    sheet_name = "标注数据"
+                    if processed_ds_id:
+                        sheet_name = f"数据集{processed_ds_id}标注"
+                        
+                    empty_annotations.to_excel(writer, sheet_name=sheet_name, index=False)
+                    current_app.logger.warning("⚠️ 无符合条件的标注数据，创建空表")
+                
             except Exception as e:
                 current_app.logger.error(f"❌ 导出标注数据失败: {e}")
-                # 创建错误信息表
                 error_df = pd.DataFrame([{'error': f'标注数据导出失败: {str(e)}'}])
-                error_df.to_excel(writer, sheet_name='annotations', index=False)
+                error_df.to_excel(writer, sheet_name="标注数据错误", index=False)
             
-            # 2. 导出图片数据表 (images)
+            # 2. 导出图片数据
             try:
-                current_app.logger.info("正在导出图片数据...")
-                images_data = list(db.images.find({}, {"_id": 0}))
-                current_app.logger.info(f"从MongoDB获取到 {len(images_data)} 条图片数据")
+                # 构建图片查询条件
+                img_query = {}
                 
-                if not images_data:
-                    # 使用备用内存数据转换为新格式
-                    current_app.logger.info("MongoDB中无图片数据，使用备用内存数据")
-                    images_data = []
-                    for img in IMAGES:
-                        images_data.append({
-                            'image_id': img['image_id'],
-                            'image_path': f"static/img/{img['filename']}"
-                        })
-                    current_app.logger.info(f"备用数据转换完成: {len(images_data)} 条记录")
+                # 如果指定了数据集，获取该数据集关联的图片ID
+                if processed_ds_id is not None:
+                    dataset_images = list(db.image_datasets.find(
+                        {"dataset_id": processed_ds_id}, 
+                        {"_id": 0, "image_id": 1}
+                    ))
+                    if dataset_images:
+                        image_ids = [img['image_id'] for img in dataset_images]
+                        img_query["image_id"] = {"$in": image_ids}
+                
+                current_app.logger.info(f"导出图片数据，查询条件: {img_query}")
+                
+                # 从MongoDB获取符合条件的图片
+                images_data = list(db.images.find(img_query, {"_id": 0}))
+                current_app.logger.info(f"从MongoDB获取到 {len(images_data)} 条图片数据")
                 
                 if images_data:
                     images_df = pd.DataFrame(images_data)
-                    # 确保字段顺序：image_id | image_path
                     column_order = ['image_id', 'image_path']
                     available_columns = [col for col in column_order if col in images_df.columns]
                     images_df = images_df.reindex(columns=available_columns)
                     
-                    images_df.to_excel(writer, sheet_name='images', index=False)
+                    sheet_name = "图片数据"
+                    if processed_ds_id:
+                        sheet_name = f"数据集{processed_ds_id}图片"
+                        
+                    images_df.to_excel(writer, sheet_name=sheet_name, index=False)
                     current_app.logger.info(f"✅ 成功导出图片数据: {len(images_df)} 条记录")
                 else:
-                    # 创建空的图片表结构
+                    # 创建空表
                     empty_images = pd.DataFrame(columns=['image_id', 'image_path'])
-                    empty_images.to_excel(writer, sheet_name='images', index=False)
-                    current_app.logger.warning("⚠️ 图片数据为空，创建空表结构")
                     
+                    sheet_name = "图片数据"
+                    if processed_ds_id:
+                        sheet_name = f"数据集{processed_ds_id}图片"
+                        
+                    empty_images.to_excel(writer, sheet_name=sheet_name, index=False)
+                    current_app.logger.warning("⚠️ 无符合条件的图片数据，创建空表")
+                
             except Exception as e:
                 current_app.logger.error(f"❌ 导出图片数据失败: {e}")
-                # 创建错误信息表
                 error_df = pd.DataFrame([{'error': f'图片数据导出失败: {str(e)}'}])
-                error_df.to_excel(writer, sheet_name='images', index=False)
+                error_df.to_excel(writer, sheet_name="图片数据错误", index=False)
             
-            # 3. 导出标签数据表 (labels)
+            # 3. 导出标签数据
             try:
-                current_app.logger.info("正在导出标签数据...")
-                labels_data = list(db.labels.find({}, {"_id": 0}))
-                current_app.logger.info(f"从MongoDB获取到 {len(labels_data)} 条标签数据")
+                # 构建标签查询条件
+                label_query = {}
                 
-                if not labels_data:
-                    # 使用备用内存数据转换为新格式
-                    current_app.logger.info("MongoDB中无标签数据，使用备用内存数据")
-                    labels_data = []
-                    label_id_set = set()
-                    for label in LABELS:
-                        if label['label_id'] not in label_id_set:
-                            labels_data.append({
-                                'label_id': label['label_id'],
-                                'label_name': label['name'],
-                                'category': '病理学'  # 默认分类
-                            })
-                            label_id_set.add(label['label_id'])
-                    current_app.logger.info(f"备用数据转换完成: {len(labels_data)} 条记录")
+                current_app.logger.info(f"导出标签数据，查询条件: {label_query}")
+                
+                # 从MongoDB获取符合条件的标签
+                labels_data = list(db.labels.find(label_query, {"_id": 0}))
+                current_app.logger.info(f"从MongoDB获取到 {len(labels_data)} 条标签数据")
                 
                 if labels_data:
                     labels_df = pd.DataFrame(labels_data)
-                    # 确保字段顺序：label_id | label_name | category
                     column_order = ['label_id', 'label_name', 'category']
                     available_columns = [col for col in column_order if col in labels_df.columns]
                     labels_df = labels_df.reindex(columns=available_columns)
                     
-                    # 按label_id排序
+                    # 按标签ID排序
                     labels_df = labels_df.sort_values('label_id')
                     
-                    labels_df.to_excel(writer, sheet_name='labels', index=False)
+                    sheet_name = "标签数据"
+                    if processed_ds_id:
+                        sheet_name = f"数据集{processed_ds_id}标签"
+                        
+                    labels_df.to_excel(writer, sheet_name=sheet_name, index=False)
                     current_app.logger.info(f"✅ 成功导出标签数据: {len(labels_df)} 条记录")
                 else:
-                    # 创建空的标签表结构
+                    # 创建空表
                     empty_labels = pd.DataFrame(columns=['label_id', 'label_name', 'category'])
-                    empty_labels.to_excel(writer, sheet_name='labels', index=False)
-                    current_app.logger.warning("⚠️ 标签数据为空，创建空表结构")
                     
+                    sheet_name = "标签数据"
+                    if processed_ds_id:
+                        sheet_name = f"数据集{processed_ds_id}标签"
+                        
+                    empty_labels.to_excel(writer, sheet_name=sheet_name, index=False)
+                    current_app.logger.warning("⚠️ 无符合条件的标签数据，创建空表")
+                
             except Exception as e:
                 current_app.logger.error(f"❌ 导出标签数据失败: {e}")
-                # 创建错误信息表
                 error_df = pd.DataFrame([{'error': f'标签数据导出失败: {str(e)}'}])
-                error_df.to_excel(writer, sheet_name='labels', index=False)
+                error_df.to_excel(writer, sheet_name="标签数据错误", index=False)
+            
+            # 4. 导出数据集数据
+            try:
+                # 构建数据集查询条件
+                ds_query = {}
+                if processed_ds_id is not None:
+                    ds_query['id'] = processed_ds_id
+                
+                current_app.logger.info(f"导出数据集信息，查询条件: {ds_query}")
+                
+                # 从MongoDB获取符合条件的数据集
+                datasets_data = list(db.datasets.find(ds_query, {"_id": 0}))
+                current_app.logger.info(f"从MongoDB获取到 {len(datasets_data)} 条数据集信息")
+                
+                if datasets_data:
+                    datasets_df = pd.DataFrame(datasets_data)
+                    column_order = ['id', 'name', 'description', 'created_at', 'image_count', 'status']
+                    available_columns = [col for col in column_order if col in datasets_df.columns]
+                    datasets_df = datasets_df.reindex(columns=available_columns)
+                    
+                    # 按ID排序
+                    datasets_df = datasets_df.sort_values('id')
+                    
+                    datasets_df.to_excel(writer, sheet_name="数据集信息", index=False)
+                    current_app.logger.info(f"✅ 成功导出数据集信息: {len(datasets_df)} 条记录")
+                else:
+                    # 创建空表
+                    empty_datasets = pd.DataFrame(columns=['id', 'name', 'description', 'created_at', 'image_count', 'status'])
+                    empty_datasets.to_excel(writer, sheet_name="数据集信息", index=False)
+                    current_app.logger.warning("⚠️ 无符合条件的数据集信息，创建空表")
+                
+            except Exception as e:
+                current_app.logger.error(f"❌ 导出数据集信息失败: {e}")
+                error_df = pd.DataFrame([{'error': f'数据集信息导出失败: {str(e)}'}])
+                error_df.to_excel(writer, sheet_name="数据集信息错误", index=False)
         
         output.seek(0)
         
         # 生成文件名
-        filename = "medical_annotation_data"
-        if dataset_id:
-            filename += f"_dataset_{dataset_id}"
+        filename = "医学图像标注数据"
+        if processed_ds_id:
+            filename += f"_数据集{processed_ds_id}"
         if expert_id:
             filename += f"_{expert_id}"
-        filename += ".xlsx"
+        filename += f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
         current_app.logger.info(f"🎉 导出完成，文件名: {filename}")
         
-        return send_file(output, 
-                        as_attachment=True, 
-                        download_name=filename,
-                        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        return send_file(
+            output, 
+            as_attachment=True, 
+            download_name=filename,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
     
     except Exception as e:
         current_app.logger.error(f"❌ 通用导出失败: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@bp.route('/api/export_excel/<string:ds_id>')
-def export_excel(ds_id):
-    # 数据集特定导出接口（支持基于角色的独立数据导出）- 多工作表Excel文件
-    expert_id = request.args.get('expert_id')
-    
-    # 根据用户名获取角色
-    user_role = None
-    if expert_id:
-        for user in USERS:
-            if user['username'] == expert_id:
-                user_role = user['role']
-                break
-    
-    actual_expert_id = ROLE_TO_EXPERT_ID.get(user_role, 2) if user_role else 2
-    
-    try:
-        # 处理dataset_id，支持字符串和整数
-        processed_ds_id = ds_id
-        if isinstance(ds_id, str) and ds_id.isdigit():
-            processed_ds_id = int(ds_id)
-        
-        output = BytesIO()
-        
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 1. 导出标注数据表 (annotations) - 筛选特定数据集和专家
-            try:
-                if expert_id:
-                    # 如果指定了专家，只导出该专家的标注
-                    query = {"dataset_id": processed_ds_id, "expert_id": actual_expert_id}
-                else:
-                    # 否则导出整个数据集的所有标注
-                    query = {"dataset_id": processed_ds_id}
-                
-                annotations_data = list(db.annotations.find(query, {"_id": 0}))
-                
-                if not annotations_data:
-                    # 使用备用内存数据
-                    if isinstance(processed_ds_id, int):
-                        annotations_data = [a for a in ANNOTATIONS if a.get('dataset_id') == processed_ds_id]
-                        if expert_id:
-                            annotations_data = [a for a in annotations_data if a.get('expert_id') == actual_expert_id]
-                    else:
-                        annotations_data = []
-                
-                if annotations_data:
-                    # 按照新的字段顺序排列
-                    annotations_df = pd.DataFrame(annotations_data)
-                    column_order = ['dataset_id', 'record_id', 'image_id', 'expert_id', 'label_id', 'tip', 'datetime']
-                    available_columns = [col for col in column_order if col in annotations_df.columns]
-                    annotations_df = annotations_df.reindex(columns=available_columns)
-                    
-                    annotations_df.to_excel(writer, sheet_name='annotations', index=False)
-                    current_app.logger.info(f"导出数据集{processed_ds_id}标注数据: {len(annotations_df)} 条记录")
-                else:
-                    # 创建空的标注表
-                    empty_annotations = pd.DataFrame(columns=['dataset_id', 'record_id', 'image_id', 'expert_id', 'label_id', 'tip', 'datetime'])
-                    empty_annotations.to_excel(writer, sheet_name='annotations', index=False)
-                    current_app.logger.warning(f"数据集{processed_ds_id}无标注数据")
-                    
-            except Exception as e:
-                current_app.logger.error(f"导出数据集{processed_ds_id}标注数据失败: {e}")
-                error_df = pd.DataFrame([{'error': f'标注数据导出失败: {str(e)}'}])
-                error_df.to_excel(writer, sheet_name='annotations', index=False)
-            
-            # 2. 导出该数据集相关的图片数据表 (images)
-            try:
-                # 通过关联表查询该数据集的图片
-                dataset_images = list(db.image_datasets.find({"dataset_id": processed_ds_id}, {"_id": 0, "image_id": 1}))
-                image_ids = [img['image_id'] for img in dataset_images]
-                
-                if image_ids:
-                    # 获取图片详细信息
-                    images_data = list(db.images.find({"image_id": {"$in": image_ids}}, {"_id": 0}))
-                else:
-                    images_data = []
-                
-                if not images_data:
-                    # 使用备用内存数据
-                    if isinstance(processed_ds_id, int):
-                        backup_images = [img for img in IMAGES if img.get('dataset_id') == processed_ds_id]
-                        images_data = []
-                        for img in backup_images:
-                            images_data.append({
-                                'image_id': img['image_id'],
-                                'image_path': f"static/img/{img['filename']}"
-                            })
-                
-                if images_data:
-                    images_df = pd.DataFrame(images_data)
-                    column_order = ['image_id', 'image_path']
-                    available_columns = [col for col in column_order if col in images_df.columns]
-                    images_df = images_df.reindex(columns=available_columns)
-                    
-                    images_df.to_excel(writer, sheet_name='images', index=False)
-                    current_app.logger.info(f"导出数据集{processed_ds_id}图片数据: {len(images_df)} 条记录")
-                else:
-                    empty_images = pd.DataFrame(columns=['image_id', 'image_path'])
-                    empty_images.to_excel(writer, sheet_name='images', index=False)
-                    
-            except Exception as e:
-                current_app.logger.error(f"导出数据集{processed_ds_id}图片数据失败: {e}")
-                error_df = pd.DataFrame([{'error': f'图片数据导出失败: {str(e)}'}])
-                error_df.to_excel(writer, sheet_name='images', index=False)
-            
-            # 3. 导出标签数据表 (labels) - 导出所有标签供参考
-            try:
-                labels_data = list(db.labels.find({}, {"_id": 0}))
-                if not labels_data:
-                    # 使用备用内存数据转换为新格式
-                    labels_data = []
-                    if isinstance(processed_ds_id, int):
-                        backup_labels = [l for l in LABELS if l.get('dataset_id') == processed_ds_id]
-                        for label in backup_labels:
-                            labels_data.append({
-                                'label_id': label['label_id'],
-                                'label_name': label['name'],
-                                'category': '病理学'  # 默认分类
-                            })
-                    
-                    # 如果仍然没有数据，使用所有LABELS作为备用
-                    if not labels_data:
-                        label_id_set = set()
-                        for label in LABELS:
-                            if label['label_id'] not in label_id_set:
-                                labels_data.append({
-                                    'label_id': label['label_id'],
-                                    'label_name': label['name'],
-                                    'category': '病理学'
-                                })
-                                label_id_set.add(label['label_id'])
-                
-                if labels_data:
-                    labels_df = pd.DataFrame(labels_data)
-                    column_order = ['label_id', 'label_name', 'category']
-                    available_columns = [col for col in column_order if col in labels_df.columns]
-                    labels_df = labels_df.reindex(columns=available_columns)
-                    
-                    # 按label_id排序
-                    labels_df = labels_df.sort_values('label_id')
-                    
-                    labels_df.to_excel(writer, sheet_name='labels', index=False)
-                    current_app.logger.info(f"导出标签数据: {len(labels_df)} 条记录")
-                else:
-                    empty_labels = pd.DataFrame(columns=['label_id', 'label_name', 'category'])
-                    empty_labels.to_excel(writer, sheet_name='labels', index=False)
-                    
-            except Exception as e:
-                current_app.logger.error(f"导出标签数据失败: {e}")
-                error_df = pd.DataFrame([{'error': f'标签数据导出失败: {str(e)}'}])
-                error_df.to_excel(writer, sheet_name='labels', index=False)
-        
-        output.seek(0)
-        
-        # 生成文件名
-        filename = f"dataset_{processed_ds_id}_medical_data"
-        if expert_id:
-            filename += f"_{user_role}_role"
-        filename += ".xlsx"
-        
-        return send_file(output, 
-                        as_attachment=True, 
-                        download_name=filename, 
-                        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    
-    except Exception as e:
-        current_app.logger.error(f"数据集{ds_id}导出Excel失败: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"msg": "error", "error": str(e)}), 500

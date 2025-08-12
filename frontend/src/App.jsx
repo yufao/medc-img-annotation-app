@@ -9,32 +9,65 @@ export default function App() {
   const [dataset, setDataset] = useState(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedImageId, setSelectedImageId] = useState(null);
+  const [adminMode, setAdminMode] = useState(false);
+  const [showDatasetManager, setShowDatasetManager] = useState(false);
+
+  function handleLogin(username, role) {
+    setUser(username);
+    setRole(role);
+  }
+
+  function handleLogout() {
+    setUser(null);
+    setDataset(null);
+    setAdminMode(false);
+  }
+
+  function handleImageSelect(id) {
+    setSelectedImageId(id);
+    setSelectMode(false);
+  }
+
+  function handleAnnotationDone() {
+    setDataset(null);
+    setSelectedImageId(null);
+  }
 
   if (!user) return <div className="login-bg"><Login onLogin={(u, r) => handleLogin(u, r)} /></div>;
-  if (!dataset) return <div className="select-bg"><DatasetSelect user={user} onSelect={setDataset} /></div>;
+  if (showDatasetManager) return <div className="select-bg"><DatasetManager user={user} role={role} onBack={() => setShowDatasetManager(false)} /></div>;
+  if (!dataset) return <div className="select-bg"><DatasetSelect user={user} role={role} onSelect={setDataset} onAdmin={() => role === 'admin' && setShowDatasetManager(true)} /></div>;
   if (selectMode) return <div className="select-bg"><ImageSelector user={user} dataset={dataset} role={role} onSelect={handleImageSelect} onBack={() => setSelectMode(false)} /></div>;
 
   return (
-    <div className="main-bg">
-      <div className="top-bar">
-        <span>用户: <b>{user}</b> ({role})</span>
-        <div className="logo-container">
-          <div className="logo-placeholder">实验室LOGO</div>
-          <div className="logo-placeholder">学校LOGO</div>
+    <div className="app-container">
+      {/* 页面背景LOGO */}
+      <div className="page-logos">
+        <div className="logo-left">
+          <img src="/实验室LOGO.png" alt="实验室LOGO" className="page-logo" />
         </div>
-        <button className="btn logout" onClick={handleLogout}>退出</button>
+        <div className="logo-right">
+          <img src="/JNU-LOGO.jpg" alt="学校LOGO" className="page-logo" />
+        </div>
+        
       </div>
-      <Annotate 
-        user={user} 
-        dataset={dataset} 
-        role={role}
-        onDone={handleAnnotationDone} 
-        imageIdInit={selectedImageId}
-        onSelectMode={() => setSelectMode(true)}
-      />
-      <div className="export-bar">
-        <Export />
-        <button className="btn" onClick={() => setSelectMode(true)}>选择图片/修改标注</button>
+      <div className="main-bg">
+        <div className="top-bar">
+          <span>用户: <b>{user}</b> ({role})</span>
+          <span className="app-title">医学图像标注系统</span>
+          <button className="btn logout" onClick={handleLogout}>退出</button>
+        </div>
+        <Annotate 
+          user={user} 
+          dataset={dataset} 
+          role={role}
+          onDone={handleAnnotationDone} 
+          imageIdInit={selectedImageId}
+          onSelectMode={() => setSelectMode(true)}
+        />
+        <div className="export-bar">
+          <Export dataset={dataset} user={user} role={role} />
+          <button className="btn" onClick={() => setSelectMode(true)}>选择图片/修改标注</button>
+        </div>
       </div>
     </div>
   );
@@ -92,7 +125,7 @@ function Login({ onLogin }) {
   );
 }
 
-function DatasetSelect({ user, onSelect }) {
+function DatasetSelect({ user, role, onSelect, onAdmin }) {
   const [datasets, setDatasets] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -127,6 +160,13 @@ function DatasetSelect({ user, onSelect }) {
   return (
     <div className="dataset-card">
       <h2>选择数据集任务</h2>
+      {role === 'admin' && (
+        <div className="admin-option">
+          <button className="btn admin-btn" onClick={() => setShowDatasetManager(true)}>
+            管理数据集
+          </button>
+        </div>
+      )}
       {datasets.length === 0 ? (
         <div style={{textAlign:'center',padding:32}}>
           <div style={{fontSize:18,color:'#999',marginBottom:16}}>暂无可用数据集</div>
@@ -717,11 +757,397 @@ function ImageSelector({ user, dataset, role, onSelect, onBack, pageSize = 20 })
   );
 }
 
-function Export() {
+function Export({ dataset, user, role }) {
+  const [exporting, setExporting] = useState(false);
+  
   const handleExport = () => {
-    window.open('/api/export', '_blank');
+    setExporting(true);
+    
+    // 构建导出URL，添加数据集和用户筛选参数
+    let exportUrl = '/api/export';
+    const params = [];
+    
+    if (dataset && dataset.id) {
+      params.push(`dataset_id=${dataset.id}`);
+    }
+    
+    if (user) {
+      params.push(`expert_id=${user}`);
+    }
+    
+    if (params.length > 0) {
+      exportUrl += '?' + params.join('&');
+    }
+    
+    // 打开导出URL
+    window.open(exportUrl, '_blank');
+    
+    // 短暂延迟后重置状态
+    setTimeout(() => {
+      setExporting(false);
+    }, 2000);
   };
-  return <button className='btn' onClick={handleExport}>导出Excel</button>;
+  
+  return (
+    <button 
+      className={`btn ${exporting ? 'exporting' : ''}`} 
+      onClick={handleExport}
+      disabled={exporting}
+    >
+      {exporting ? '导出中...' : '导出Excel'}
+    </button>
+  );
+}
+
+// 数据集管理组件
+function DatasetManager({ user, role, onBack }) {
+  const [datasets, setDatasets] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showUploadForm, setShowUploadForm] = useState(false);
+  const [selectedDataset, setSelectedDataset] = useState(null);
+  
+  // 表单数据
+  const [newDatasetName, setNewDatasetName] = useState('');
+  const [newDatasetDesc, setNewDatasetDesc] = useState('');
+  const [labelInputs, setLabelInputs] = useState([{ name: '', category: '病理学' }]);
+  const [files, setFiles] = useState([]);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  
+  useEffect(() => {
+    fetchDatasets();
+  }, []);
+  
+  const fetchDatasets = async () => {
+    setLoading(true);
+    try {
+      const response = await api.get('/datasets');
+      setDatasets(response.data || []);
+    } catch (error) {
+      console.error('获取数据集失败:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleCreateDataset = async () => {
+    if (!newDatasetName.trim()) {
+      alert('请输入数据集名称');
+      return;
+    }
+    
+    try {
+      const response = await api.post('/admin/datasets', {
+        name: newDatasetName,
+        description: newDatasetDesc,
+        role: role
+      });
+      
+      if (response.data.msg === 'success') {
+        // 创建成功后添加标签
+        if (labelInputs.length > 0) {
+          const validLabels = labelInputs.filter(label => label.name.trim() !== '');
+          if (validLabels.length > 0) {
+            await api.post(`/admin/datasets/${response.data.dataset_id}/labels`, {
+              labels: validLabels,
+              role: role
+            });
+          }
+        }
+        
+        alert('数据集创建成功!');
+        setNewDatasetName('');
+        setNewDatasetDesc('');
+        setLabelInputs([{ name: '', category: '病理学' }]);
+        setShowCreateForm(false);
+        fetchDatasets(); // 刷新数据集列表
+      }
+    } catch (error) {
+      console.error('创建数据集失败:', error);
+      alert(`创建失败: ${error.response?.data?.error || error.message}`);
+    }
+  };
+  
+  const handleDeleteDataset = async (datasetId) => {
+    if (!window.confirm('确认删除此数据集? 此操作不可恢复!')) {
+      return;
+    }
+    
+    try {
+      const response = await api.delete(`/admin/datasets/${datasetId}?role=${role}`);
+      if (response.data.msg === 'success') {
+        alert('数据集删除成功!');
+        fetchDatasets(); // 刷新数据集列表
+      }
+    } catch (error) {
+      console.error('删除数据集失败:', error);
+      alert(`删除失败: ${error.response?.data?.error || error.message}`);
+    }
+  };
+  
+  const handleFileChange = (e) => {
+    setFiles(Array.from(e.target.files));
+  };
+  
+  const handleUpload = async () => {
+    if (!selectedDataset) {
+      alert('请先选择数据集');
+      return;
+    }
+    
+    if (!files.length) {
+      alert('请选择至少一张图片');
+      return;
+    }
+    
+    const formData = new FormData();
+    formData.append('role', role);
+    
+    files.forEach(file => {
+      formData.append('images', file);
+    });
+    
+    try {
+      const response = await api.post(`/admin/datasets/${selectedDataset.id}/images`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(percentCompleted);
+        }
+      });
+      
+      if (response.data.msg === 'success') {
+        alert(`上传成功! 成功上传 ${response.data.uploaded} 张图片, 失败 ${response.data.failed} 张`);
+        setFiles([]);
+        setUploadProgress(0);
+        setShowUploadForm(false);
+        fetchDatasets(); // 刷新数据集列表
+      }
+    } catch (error) {
+      console.error('上传图片失败:', error);
+      alert(`上传失败: ${error.response?.data?.error || error.message}`);
+    }
+  };
+  
+  const addLabelInput = () => {
+    setLabelInputs([...labelInputs, { name: '', category: '病理学' }]);
+  };
+  
+  const updateLabelInput = (index, field, value) => {
+    const updatedInputs = [...labelInputs];
+    updatedInputs[index][field] = value;
+    setLabelInputs(updatedInputs);
+  };
+  
+  const removeLabelInput = (index) => {
+    const updatedInputs = [...labelInputs];
+    updatedInputs.splice(index, 1);
+    setLabelInputs(updatedInputs);
+  };
+  
+  return (
+    <div className="dataset-card" style={{maxWidth: 800}}>
+      <div className="selector-header">
+        <h2>数据集管理面板</h2>
+        <button className="btn back-btn" onClick={onBack}>返回</button>
+      </div>
+      
+      <div className="admin-controls">
+        <button 
+          className="btn admin-btn" 
+          onClick={() => {
+            setShowCreateForm(true);
+            setShowUploadForm(false);
+          }}
+        >
+          创建新数据集
+        </button>
+        
+        <button 
+          className="btn admin-btn" 
+          onClick={() => {
+            setShowUploadForm(true);
+            setShowCreateForm(false);
+          }}
+          disabled={datasets.length === 0}
+        >
+          上传图片
+        </button>
+      </div>
+      
+      {showCreateForm && (
+        <div className="form-container">
+          <h3>创建新数据集</h3>
+          <div className="form-row">
+            <label>数据集名称:</label>
+            <input 
+              className="input" 
+              value={newDatasetName} 
+              onChange={e => setNewDatasetName(e.target.value)}
+              placeholder="例如: 肺炎CT图像集"
+            />
+          </div>
+          
+          <div className="form-row">
+            <label>数据集描述:</label>
+            <textarea 
+              className="input" 
+              value={newDatasetDesc} 
+              onChange={e => setNewDatasetDesc(e.target.value)}
+              placeholder="描述该数据集的用途和内容"
+              style={{minHeight: 80}}
+            />
+          </div>
+          
+          <div className="label-section">
+            <h3>标签配置</h3>
+            <p className="hint-text">添加该数据集的标签选项，标注时将使用这些标签</p>
+            
+            {labelInputs.map((label, index) => (
+              <div key={index} className="label-input-row">
+                <input 
+                  className="input label-name-input" 
+                  value={label.name} 
+                  onChange={e => updateLabelInput(index, 'name', e.target.value)}
+                  placeholder="标签名称"
+                />
+                <select 
+                  className="select" 
+                  value={label.category} 
+                  onChange={e => updateLabelInput(index, 'category', e.target.value)}
+                >
+                  <option value="病理学">病理学</option>
+                  <option value="解剖学">解剖学</option>
+                  <option value="影像学">影像学</option>
+                </select>
+                <button 
+                  className="btn-icon remove-btn" 
+                  onClick={() => removeLabelInput(index)}
+                  title="移除此标签"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            
+            <button className="btn-text" onClick={addLabelInput}>+ 添加标签</button>
+          </div>
+          
+          <div className="form-actions">
+            <button className="btn cancel-btn" onClick={() => setShowCreateForm(false)}>取消</button>
+            <button className="btn" onClick={handleCreateDataset}>创建数据集</button>
+          </div>
+        </div>
+      )}
+      
+      {showUploadForm && (
+        <div className="form-container">
+          <h3>上传图片</h3>
+          <div className="form-row">
+            <label>选择数据集:</label>
+            <select 
+              className="select" 
+              value={selectedDataset ? selectedDataset.id : ''} 
+              onChange={e => {
+                const id = parseInt(e.target.value);
+                const dataset = datasets.find(d => d.id === id);
+                setSelectedDataset(dataset);
+              }}
+            >
+              <option value="">-- 选择数据集 --</option>
+              {datasets.map(ds => (
+                <option key={ds.id} value={ds.id}>{ds.name}</option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="form-row">
+            <label>选择图片:</label>
+            <input 
+              type="file" 
+              multiple 
+              accept="image/*" 
+              onChange={handleFileChange}
+              className="file-input"
+            />
+            <p className="hint-text">支持jpg, png, jpeg等图片格式，可多选</p>
+          </div>
+          
+          {files.length > 0 && (
+            <div className="file-preview">
+              <p>已选择 {files.length} 个文件</p>
+              <ul className="file-list">
+                {files.slice(0, 5).map((file, i) => (
+                  <li key={i}>{file.name} ({(file.size / 1024).toFixed(1)} KB)</li>
+                ))}
+                {files.length > 5 && <li>...等 {files.length - 5} 个文件</li>}
+              </ul>
+            </div>
+          )}
+          
+          {uploadProgress > 0 && (
+            <div className="progress-bar-container">
+              <div 
+                className="progress-bar" 
+                style={{width: `${uploadProgress}%`}}
+              />
+              <span className="progress-text">{uploadProgress}%</span>
+            </div>
+          )}
+          
+          <div className="form-actions">
+            <button className="btn cancel-btn" onClick={() => setShowUploadForm(false)}>取消</button>
+            <button 
+              className="btn" 
+              onClick={handleUpload}
+              disabled={!selectedDataset || files.length === 0}
+            >
+              上传图片
+            </button>
+          </div>
+        </div>
+      )}
+      
+      <div className="datasets-list">
+        <h3>现有数据集</h3>
+        {loading ? (
+          <div className="loading-text">加载数据集...</div>
+        ) : datasets.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-title">暂无数据集</div>
+            <div className="empty-subtitle">点击"创建新数据集"按钮创建您的第一个数据集</div>
+          </div>
+        ) : (
+          <div className="dataset-table">
+            <div className="dataset-table-header">
+              <div className="col-id">ID</div>
+              <div className="col-name">名称</div>
+              <div className="col-count">图片数量</div>
+              <div className="col-actions">操作</div>
+            </div>
+            
+            {datasets.map(dataset => (
+              <div key={dataset.id} className="dataset-table-row">
+                <div className="col-id">{dataset.id}</div>
+                <div className="col-name">{dataset.name}</div>
+                <div className="col-count">{dataset.image_count || 0}</div>
+                <div className="col-actions">
+                  <button 
+                    className="btn-text delete-btn" 
+                    onClick={() => handleDeleteDataset(dataset.id)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 const style = document.createElement('style');
@@ -735,7 +1161,73 @@ body {
   color: #2c3e50;
   font-weight: 400;
 }
+  .app-container {
+  position: relative;
+  min-height: 100vh;
+}
+
+.page-logos {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.logo-left {
+  position: absolute;
+  top: 50px;
+  left: 60px;
+  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+  padding: 15px;
+  border-radius: 25px;
+  box-shadow: 0 8px 25px rgba(52, 152, 219, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+  transition: transform 0.4s ease, box-shadow 0.4s ease;
+  transform: rotate(-5deg);
+}
+
+.logo-right {
+  position: absolute;
+  top: 50px;
+  right: 60px;
+  background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+  padding: 15px;
+  border-radius: 25px;
+  box-shadow: 0 8px 25px rgba(52, 152, 219, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: auto;
+  transition: transform 0.4s ease, box-shadow 0.4s ease;
+  transform: rotate(5deg);
+}
+
+.logo-left:hover {
+  transform: rotate(5deg) scale(1.1);
+  box-shadow: 0 12px 35px rgba(52, 152, 219, 0.6);
+}
+
+.logo-right:hover {
+  transform: rotate(-5deg) scale(1.1);
+  box-shadow: 0 12px 35px rgba(52, 152, 219, 0.6);
+}
+
+.page-logo {
+  width: 140px;
+  height: 140px;
+  object-fit: contain;
+  border-radius: 16px;
+}
+
 .main-bg {
+  position: relative;
+  z-index: 2;
   max-width: 720px;
   margin: 64px auto 0 auto;
   background: rgba(255,255,255,0.98);
@@ -744,6 +1236,7 @@ body {
   padding: 56px 56px 40px 56px;
   min-height: 520px;
 }
+
 .top-bar {
   display: flex;
   justify-content: space-between;
@@ -756,14 +1249,16 @@ body {
   font-weight: 500;
   color: #34495e;
 }
-.logo-container {
-  display: flex;
-  gap: 12px;
-  position: absolute;
-  right: 120px;
-  top: 50%;
-  transform: translateY(-50%);
+.app-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #2c3e50;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
+
 .logo-placeholder {
   width: 50px;
   height: 50px;
@@ -1362,6 +1857,341 @@ input[type="password"], input[type="text"] {
   font-weight: 500;
   line-height: 1.6;
 }
+
+/* 数据集管理器样式 */
+.admin-controls {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 16px;
+  background: rgba(116, 185, 255, 0.1);
+  border-radius: 12px;
+  border: 1px solid rgba(116, 185, 255, 0.2);
+}
+
+.admin-btn {
+  background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(116, 185, 255, 0.3);
+}
+
+.admin-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(116, 185, 255, 0.4);
+}
+
+.admin-btn:disabled {
+  background: #bdc3c7;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.form-container {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+  border: 1px solid #e1e8ed;
+}
+
+.form-row {
+  margin-bottom: 16px;
+}
+
+.form-row label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #2c3e50;
+}
+
+.input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid #e1e8ed;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: border-color 0.3s ease;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  outline: none;
+  border-color: #74b9ff;
+  box-shadow: 0 0 0 3px rgba(116, 185, 255, 0.1);
+}
+
+.select {
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid #e1e8ed;
+  border-radius: 8px;
+  font-size: 14px;
+  background: white;
+  cursor: pointer;
+  transition: border-color 0.3s ease;
+  box-sizing: border-box;
+}
+
+.select:focus {
+  outline: none;
+  border-color: #74b9ff;
+  box-shadow: 0 0 0 3px rgba(116, 185, 255, 0.1);
+}
+
+.label-section {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #e1e8ed;
+}
+
+.label-section h3 {
+  margin-bottom: 8px;
+  color: #2c3e50;
+}
+
+.hint-text {
+  font-size: 13px;
+  color: #74798c;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.label-input-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.label-name-input {
+  flex: 1;
+}
+
+.btn-icon {
+  background: #e74c3c;
+  color: white;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: bold;
+  transition: all 0.3s ease;
+}
+
+.btn-icon:hover {
+  background: #c0392b;
+  transform: scale(1.1);
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  color: #74b9ff;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 8px 0;
+  transition: color 0.3s ease;
+}
+
+.btn-text:hover {
+  color: #0984e3;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e1e8ed;
+}
+
+.cancel-btn {
+  background: #bdc3c7;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.cancel-btn:hover {
+  background: #95a5a6;
+}
+
+.file-input {
+  width: 100%;
+  padding: 12px;
+  border: 2px dashed #74b9ff;
+  border-radius: 8px;
+  background: rgba(116, 185, 255, 0.05);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.file-input:hover {
+  background: rgba(116, 185, 255, 0.1);
+  border-color: #0984e3;
+}
+
+.file-preview {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 12px;
+  border: 1px solid #e1e8ed;
+}
+
+.file-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+}
+
+.file-list li {
+  padding: 4px 0;
+  font-size: 13px;
+  color: #74798c;
+}
+
+.progress-bar-container {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: #e1e8ed;
+  border-radius: 4px;
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #74b9ff 0%, #0984e3 100%);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  position: absolute;
+  top: -24px;
+  right: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #74b9ff;
+}
+
+.datasets-list {
+  margin-top: 32px;
+}
+
+.datasets-list h3 {
+  margin-bottom: 16px;
+  color: #2c3e50;
+}
+
+.loading-text {
+  text-align: center;
+  padding: 24px;
+  color: #74798c;
+  font-style: italic;
+}
+
+.dataset-table {
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e1e8ed;
+}
+
+.dataset-table-header {
+  display: grid;
+  grid-template-columns: 60px 1fr 100px 80px;
+  gap: 16px;
+  padding: 16px;
+  background: #f8fafc;
+  font-weight: 600;
+  color: #2c3e50;
+  border-bottom: 1px solid #e1e8ed;
+}
+
+.dataset-table-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 100px 80px;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid #f1f3f4;
+  transition: background-color 0.3s ease;
+}
+
+.dataset-table-row:hover {
+  background: #f8fafc;
+}
+
+.dataset-table-row:last-child {
+  border-bottom: none;
+}
+
+.col-id {
+  font-weight: 600;
+  color: #74b9ff;
+}
+
+.col-name {
+  font-weight: 500;
+}
+
+.col-count {
+  text-align: center;
+  color: #74798c;
+}
+
+.col-actions {
+  text-align: center;
+}
+
+.delete-btn {
+  color: #e74c3c;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.delete-btn:hover {
+  color: #c0392b;
+}
+
+.back-btn {
+  background: #74798c;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.back-btn:hover {
+  background: #5a6c7d;
+}
+
 @media (max-width: 900px) {
   .main-bg { max-width: 98vw; padding: 18px 2vw; }
   .top-bar { flex-direction: column; gap: 10px; align-items: flex-start; }
