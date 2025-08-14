@@ -1,7 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 const api = axios.create({ baseURL: '/api' });
+
+// 防抖Hook
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -21,6 +38,7 @@ export default function App() {
     setUser(null);
     setDataset(null);
     setAdminMode(false);
+    setShowDatasetManager(false);
   }
 
   function handleImageSelect(id) {
@@ -162,7 +180,7 @@ function DatasetSelect({ user, role, onSelect, onAdmin }) {
       <h2>选择数据集任务</h2>
       {role === 'admin' && (
         <div className="admin-option">
-          <button className="btn admin-btn" onClick={() => setShowDatasetManager(true)}>
+          <button className="btn admin-btn" onClick={onAdmin}>
             管理数据集
           </button>
         </div>
@@ -201,6 +219,11 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
   const [isImageHovered, setIsImageHovered] = useState(false);
   const [isImageSelected, setIsImageSelected] = useState(false);
+  
+  // 添加加载状态和错误状态
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [submitDisabled, setSubmitDisabled] = useState(false);
 
   // 监听 imageIdInit 变化，强制切换图片
   useEffect(() => {
@@ -212,64 +235,76 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
 
   useEffect(() => {
     if (dataset) {
-      api.get('/labels', { params: { dataset_id: dataset.id } }).then(r => setLabels(r.data));
+      console.log("开始获取数据集标签，dataset:", dataset);
+      api.get('/labels', { params: { dataset_id: dataset.id } }).then(r => {
+        console.log("标签API原始响应:", r);
+        console.log("标签数据:", r.data);
+        const labelsData = r.data || [];
+        setLabels(labelsData);
+        if (labelsData.length === 0) {
+          console.error(`数据集 ${dataset.id} 没有配置标签。`);
+          setError("该数据集还没有配置标签，请联系管理员添加标签");
+        } else {
+          console.log("成功获取到的标签列表:", labelsData);
+          setError(null); // 清除之前的错误
+        }
+      }).catch(err => {
+        console.error("获取标签失败:", err);
+        setLabels([]);
+        setError("获取标签失败，请重试");
+      });
       // 获取计数信息
       fetchCounts();
     }
   }, [dataset]);
 
-  const fetchCounts = async () => {
+  // 添加缓存变量
+  const [countsCache, setCountsCache] = useState(null);
+  const [lastCountsUpdate, setLastCountsUpdate] = useState(0);
+
+  const fetchCounts = async (forceRefresh = false) => {
+    if (!dataset || !user) return;
+    
+    // 缓存5秒内的数据，避免频繁请求
+    const now = Date.now();
+    if (!forceRefresh && countsCache && (now - lastCountsUpdate < 5000)) {
+      setAnnotatedCount(countsCache.annotated_count);
+      setTotalCount(countsCache.total_count);
+      return;
+    }
+    
     try {
-      let annotatedCount = 0;
-      let totalCount = 0;
-      
-      // 尝试通过images_with_annotations获取实际计数
-      try {
-        const { data } = await api.post('/images_with_annotations', {
-          dataset_id: dataset.id,
-          expert_id: user,
+      console.log(`获取数据集${dataset.id}的统计信息...`);
+      const response = await api.get(`/datasets/${dataset.id}/statistics`, {
+        params: { 
+          expert_id: user, 
           role: role,
-          include_all: true
-        });
-        
-        if (Array.isArray(data)) {
-          totalCount = data.length;
-          annotatedCount = data.filter(img => img.annotation).length;
+          dataset_id: dataset.id // 明确指定数据集ID
         }
-      } catch (error) {
-        console.log("无法通过images_with_annotations获取计数");
-      }
-
-      // 如果上面方法失败，尝试原有API
-      if (totalCount === 0) {
-        try {
-          const annotatedRes = await api.get('/annotation_count', { 
-            params: { expert_id: user, dataset_id: dataset.id, role: role } 
-          });
-          annotatedCount = annotatedRes.data.count || 0;
-        } catch (error) {
-          console.log("标注计数API不可用");
-        }
-
-        try {
-          const totalRes = await api.get('/total_images', { 
-            params: { dataset_id: dataset.id } 
-          });
-          totalCount = totalRes.data.count || 0;
-        } catch (error) {
-          console.log("总数API不可用，从日志推断数据集有10张图片");
-          totalCount = 10; // 根据后端日志，数据集有10张图片
-        }
-      }
-
-      setAnnotatedCount(annotatedCount);
-      setTotalCount(totalCount);
+      });
+      const stats = response.data;
+      console.log("统计API响应:", stats);
       
-      console.log(`计数更新: 已标注${annotatedCount}张，总计${totalCount}张`);
+      // 确保获取的是当前数据集的统计数据
+      const counts = {
+        annotated_count: stats.annotated_count || 0,
+        total_count: stats.total_count || 0
+      };
+      
+      console.log(`数据集${dataset.id}统计: 已标注${counts.annotated_count}张，总计${counts.total_count}张`);
+      
+      setAnnotatedCount(counts.annotated_count);
+      setTotalCount(counts.total_count);
+      setCountsCache(counts);
+      setLastCountsUpdate(now);
     } catch (error) {
-      console.error("获取计数信息失败:", error);
-      setAnnotatedCount(0);
-      setTotalCount(10);
+      console.error("获取统计信息失败:", error);
+      // 重试机制：失败后3秒重试一次
+      setTimeout(() => {
+        if (dataset && user) {
+          fetchCounts(true);
+        }
+      }, 3000);
     }
   };
 
@@ -282,6 +317,8 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
   }, [dataset, user]);
 
   const fetchImage = async (id) => {
+    setIsLoading(true);
+    setError(null);
     try {
       if (id) {
         // 获取所有图片及标注信息，找到 image_id === id 的那一张
@@ -366,11 +403,28 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
       }
     } catch (error) {
       console.error("获取图片失败:", error);
+      setError("加载图片失败，请重试");
       setImg(null);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleSubmit = async () => { // 定义 handleSubmit 函数
+    if (!label) {
+      console.warn("请选择标签");
+      setError("请选择标签");
+      return;
+    }
+    
+    if (submitDisabled) {
+      console.log("正在提交中，请勿重复点击");
+      return;
+    }
+    
+    setSubmitDisabled(true);
+    setError(null);
+    
     try {
       await api.post('/annotate', {
         expert_id: user,
@@ -379,8 +433,11 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
         label,
         tip: remark
       });
+      
+      console.log(`标注提交成功: 图片${img.image_id}, 标签${label}`);
       setLabel('');
       setRemark('');
+      
       // 提交后，优先寻找未标注的图片
       try {
         const allImagesData = await api.post('/images_with_annotations', {
@@ -404,11 +461,21 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
           setImageId(null);
         }
       } catch (error) {
+        console.error("获取下一张图片失败，使用备用方法:", error);
         fetchImage();
       }
-      fetchCounts(); // 更新计数
+      fetchCounts(true); // 强制刷新计数
     } catch (error) {
       console.error("提交标注失败:", error);
+      setError("提交失败，请重试");
+      // 提示用户重试
+      if (error.response?.status >= 500) {
+        console.log("服务器错误，将在3秒后自动重试...");
+        setTimeout(() => handleSubmit(), 3000);
+      }
+    } finally {
+      // 延迟重新启用提交按钮，防止快速重复点击
+      setTimeout(() => setSubmitDisabled(false), 1000);
     }
   };
 
@@ -419,9 +486,18 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
         dataset_id: dataset.id,
         image_id: img.image_id
       });
-      if (data.image_id) fetchImage(data.image_id);
+      if (data.image_id) {
+        fetchImage(data.image_id);
+      } else {
+        console.log("已经是第一张图片");
+      }
     } catch (error) {
       console.error("获取上一张图片失败:", error);
+      // 重试机制
+      if (error.response?.status >= 500) {
+        console.log("服务器错误，将在2秒后重试...");
+        setTimeout(() => handlePrev(), 2000);
+      }
     }
   };
 
@@ -494,6 +570,24 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
       setIsImageSelected(false);
     }
   };
+
+  if (isLoading) return (
+    <div className="loading-box">
+      <div className="loading-spinner"></div>
+      <p>正在加载图片...</p>
+    </div>
+  );
+  
+  if (error) return (
+    <div className="error-box">
+      <p className="error-message">❌ {error}</p>
+      <button className="btn" onClick={() => {
+        setError(null);
+        fetchImage(imageId);
+      }}>重试</button>
+      <button className="btn secondary" onClick={onDone}>返回</button>
+    </div>
+  );
 
   if (!img) return <div className="done-box">标注完成！<button className="btn" onClick={onDone}>返回</button></div>;
   if (img.completed) return (
@@ -592,6 +686,14 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
             <img 
               src={`/static/img/${img.filename}`} 
               alt={`图片ID: ${img.image_id}`}
+              loading="lazy"
+              onError={(e) => {
+                console.error(`图片加载失败: ${img.filename}`);
+                e.target.src = '/placeholder-error.png'; // 可以添加一个错误占位图
+              }}
+              onLoad={() => {
+                console.log(`图片加载成功: ${img.filename}`);
+              }}
               style={{ 
                 transform: `scale(${imageScale}) translate(${imageOffset.x / imageScale}px, ${imageOffset.y / imageScale}px)`,
                 cursor: imageScale > 1 ? (isDragging ? 'grabbing' : 'grab') : (isImageSelected ? 'zoom-in' : 'pointer'),
@@ -618,24 +720,44 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
       <div className="form-row label-row">
         <label>标签：</label>
         <div className="label-btn-group">
-          {labels.map(l => {
-            const isSelected = String(label) === String(l.label_id);
-            return (
-              <button
-                key={l.label_id}
-                type="button"
-                className={"label-btn" + (isSelected ? " selected" : "")}
-                onClick={() => setLabel(l.label_id)}
-              >{l.name}</button>
-            );
-          })}
+          {labels.length === 0 ? (
+            <div style={{color: '#999', fontSize: '14px', padding: '10px'}}>
+              {error || "正在加载标签..."}
+            </div>
+          ) : (
+            labels.map(l => {
+              console.log("渲染标签按钮:", l);
+              // 确保类型一致性，都转为字符串再比较
+              const isSelected = String(label) === String(l.label_id || l.id);
+              return (
+                <button
+                  key={l.label_id || l.id}
+                  type="button"
+                  className={"label-btn" + (isSelected ? " selected" : "")}
+                  onClick={() => {
+                    const labelId = l.label_id || l.id;
+                    console.log(`选择标签: ${l.name}, ID: ${labelId}`);
+                    setLabel(String(labelId)); // 统一转为字符串
+                    setError(null); // 清除错误信息
+                  }}
+                >{l.name}</button>
+              );
+            })
+          )}
         </div>
       </div>
       <div className="form-row">
         <label>备注：</label>
         <input className="input" value={remark} onChange={e => setRemark(e.target.value)} placeholder="可选" />
       </div>
-      <button className="btn" onClick={handleSubmit} disabled={!label}>提交并下一张</button>
+      <button 
+        className="btn" 
+        onClick={handleSubmit} 
+        disabled={!label || submitDisabled}
+        style={{ opacity: submitDisabled ? 0.6 : 1 }}
+      >
+        {submitDisabled ? "提交中..." : "提交并下一张"}
+      </button>
       <button className="btn" onClick={handlePrev} style={{ marginLeft: 12 }}>上一张</button>
     </div>
   );
@@ -721,7 +843,16 @@ function ImageSelector({ user, dataset, role, onSelect, onBack, pageSize = 20 })
       <div style={{maxHeight:500,overflowY:'auto'}}>
         {images.map(img=>(
           <div key={img.image_id} className="image-selector-item">
-            <img src={`/static/img/${img.filename}`} alt={`图片ID: ${img.image_id}`} className="image-selector-thumb" />
+            <img 
+              src={`/static/img/${img.filename}`} 
+              alt={`图片ID: ${img.image_id}`} 
+              className="image-selector-thumb"
+              loading="lazy"
+              onError={(e) => {
+                console.error(`缩略图加载失败: ${img.filename}`);
+                e.target.style.display = 'none'; // 隐藏加载失败的图片
+              }}
+            />
             <div style={{flex:1}}>
               <div className="image-selector-id">图片 ID: #{img.image_id}</div>
               <div className="image-selector-status">
@@ -806,6 +937,9 @@ function DatasetManager({ user, role, onBack }) {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showUploadForm, setShowUploadForm] = useState(false);
   const [selectedDataset, setSelectedDataset] = useState(null);
+  const [showLabelManager, setShowLabelManager] = useState(false);
+  const [editingDatasetId, setEditingDatasetId] = useState(null);
+  const [datasetLabels, setDatasetLabels] = useState([]);
   
   // 表单数据
   const [newDatasetName, setNewDatasetName] = useState('');
@@ -827,6 +961,21 @@ function DatasetManager({ user, role, onBack }) {
       console.error('获取数据集失败:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // 获取数据集标签
+  const fetchDatasetLabels = async (datasetId) => {
+    try {
+      const response = await api.get(`/admin/datasets/${datasetId}/labels?role=${role}`);
+      const labels = response.data.map(label => ({
+        name: label.label_name,
+        category: label.category || '病理学'
+      }));
+      setDatasetLabels(labels.length > 0 ? labels : [{ name: '', category: '病理学' }]);
+    } catch (error) {
+      console.error('获取数据集标签失败:', error);
+      setDatasetLabels([{ name: '', category: '病理学' }]);
     }
   };
   
@@ -1110,6 +1259,83 @@ function DatasetManager({ user, role, onBack }) {
         </div>
       )}
       
+      {showLabelManager && (
+        <div className="form-container">
+          <h3>管理数据集 #{editingDatasetId} 标签</h3>
+          <div className="label-section">
+            {datasetLabels.map((label, index) => (
+              <div key={index} className="label-input-row">
+                <input 
+                  className="input label-name-input" 
+                  value={label.name} 
+                  onChange={e => {
+                    const updated = [...datasetLabels];
+                    updated[index].name = e.target.value;
+                    setDatasetLabels(updated);
+                  }}
+                  placeholder="标签名称"
+                />
+                <select 
+                  className="select" 
+                  value={label.category} 
+                  onChange={e => {
+                    const updated = [...datasetLabels];
+                    updated[index].category = e.target.value;
+                    setDatasetLabels(updated);
+                  }}
+                >
+                  <option value="病理学">病理学</option>
+                  <option value="解剖学">解剖学</option>
+                  <option value="影像学">影像学</option>
+                </select>
+                <button 
+                  className="btn-icon remove-btn" 
+                  onClick={() => {
+                    const updated = [...datasetLabels];
+                    updated.splice(index, 1);
+                    setDatasetLabels(updated);
+                  }}
+                  title="移除此标签"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            
+            <button className="btn-text" onClick={() => 
+              setDatasetLabels([...datasetLabels, { name: '', category: '病理学' }])
+            }>
+              + 添加标签
+            </button>
+          </div>
+          
+          <div className="form-actions">
+            <button className="btn cancel-btn" onClick={() => setShowLabelManager(false)}>取消</button>
+            <button 
+              className="btn" 
+              onClick={async () => {
+                try {
+                  const validLabels = datasetLabels.filter(l => l.name.trim() !== '');
+                  const response = await api.put(`/admin/datasets/${editingDatasetId}/labels`, {
+                    labels: validLabels,
+                    role: role
+                  });
+                  if(response.data.msg === 'success') {
+                    alert('标签更新成功!');
+                    setShowLabelManager(false);
+                  }
+                } catch (error) {
+                  console.error('更新标签失败:', error);
+                  alert(`更新失败: ${error.response?.data?.error || error.message}`);
+                }
+              }}
+            >
+              保存标签
+            </button>
+          </div>
+        </div>
+      )}
+      
       <div className="datasets-list">
         <h3>现有数据集</h3>
         {loading ? (
@@ -1135,10 +1361,39 @@ function DatasetManager({ user, role, onBack }) {
                 <div className="col-count">{dataset.image_count || 0}</div>
                 <div className="col-actions">
                   <button 
+                    className="btn-text manage-btn" 
+                    onClick={() => {
+                      setEditingDatasetId(dataset.id);
+                      fetchDatasetLabels(dataset.id);
+                      setShowLabelManager(true);
+                    }}
+                  >
+                    管理标签
+                  </button>
+                  <button 
+                    className="btn-text fix-btn" 
+                    onClick={async () => {
+                      try {
+                        const response = await api.post(`/admin/datasets/${dataset.id}/recount`, {
+                          role: role
+                        });
+                        if(response.data.msg === 'success') {
+                          alert(`图片数量已更新为: ${response.data.image_count}`);
+                          fetchDatasets(); // 刷新数据集列表
+                        }
+                      } catch (error) {
+                        console.error('修正图片数量失败:', error);
+                        alert(`修正失败: ${error.response?.data?.error || error.message}`);
+                      }
+                    }}
+                  >
+                  检查并修正图片数量统计
+                  </button>
+                  <button 
                     className="btn-text delete-btn" 
                     onClick={() => handleDeleteDataset(dataset.id)}
                   >
-                    删除
+                  删除
                   </button>
                 </div>
               </div>
@@ -1557,6 +1812,50 @@ body {
   margin: 100px 0;
   font-size: 22px;
   color: #1677ff;
+}
+
+.loading-box {
+  text-align: center;
+  margin: 100px 0;
+  font-size: 18px;
+  color: #666;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #1677ff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 20px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.error-box {
+  text-align: center;
+  margin: 100px 0;
+  padding: 20px;
+}
+
+.error-message {
+  font-size: 18px;
+  color: #dc3545;
+  margin-bottom: 20px;
+}
+
+.btn.secondary {
+  background: #6c757d;
+  color: white;
+  margin-left: 10px;
+}
+
+.btn.secondary:hover {
+  background: #5a6268;
 }
 .completion-overlay {
   position: fixed;
@@ -1997,19 +2296,28 @@ input[type="password"], input[type="text"] {
   transform: scale(1.1);
 }
 
+/* 添加边框卡片效果 */
 .btn-text {
-  background: none;
-  border: none;
-  color: #74b9ff;
+  background: white;
+  border: 2px solid transparent;
+  color: #666;
   cursor: pointer;
   font-weight: 600;
-  font-size: 14px;
-  padding: 8px 0;
-  transition: color 0.3s ease;
+  font-size: 11px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  min-width: fit-content;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  position: relative;
+  overflow: hidden;
 }
 
 .btn-text:hover {
   color: #0984e3;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
 .form-actions {
@@ -2165,16 +2473,48 @@ input[type="password"], input[type="text"] {
 
 .col-actions {
   text-align: center;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 200px;
 }
 
 .delete-btn {
-  color: #e74c3c;
+  background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+  color: #c62828;
+  border-color: #ef5350;
+}
+
+.delete-btn:hover {
+  background: linear-gradient(135deg, #ffcdd2 0%, #ef9a9a 100%);
+  color: #b71c1c;
+  border-color: #f44336;
+  box-shadow: 0 4px 16px rgba(198, 40, 40, 0.3);
+}
+
+.manage-btn {
+  color: #1677ff;
+  margin-right: 8px;
   font-size: 13px;
   font-weight: 600;
 }
 
-.delete-btn:hover {
-  color: #c0392b;
+.manage-btn:hover {
+  color: #0d4f8c;
+}
+
+.fix-btn {
+  color: #10b981;
+  margin-right: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  
+}
+
+.fix-btn:hover {
+  color: #059669;
 }
 
 .back-btn {

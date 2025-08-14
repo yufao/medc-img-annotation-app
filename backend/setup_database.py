@@ -34,6 +34,7 @@ def setup_database():
         db.images.delete_many({})
         db.labels.delete_many({})
         db.annotations.delete_many({})
+        db.sequences.delete_many({})  # 清理旧的序列
         
         # 1. 创建数据集 (保持原有结构，用于管理)
         print("\n📊 创建数据集...")
@@ -181,8 +182,18 @@ def setup_database():
         
         result = db.annotations.insert_many(sample_annotations)
         print(f"   ✅ 插入了 {len(result.inserted_ids)} 个示例标注")
+
+        # 6. 初始化所有序列
+        print("\n🔄 初始化自增序列...")
+        db.sequences.insert_many([
+            {"_id": "datasets_id", "sequence_value": db.datasets.count_documents({})},
+            {"_id": "images_id", "sequence_value": db.images.count_documents({})},
+            {"_id": "labels_id", "sequence_value": db.labels.count_documents({})},
+            {"_id": "annotations_record_id", "sequence_value": db.annotations.count_documents({})}
+        ])
+        print("   ✅ 序列初始化完成")
         
-        # 6. 创建索引提高性能
+        # 7. 创建索引提高性能
         print("\n⚡ 创建数据库索引...")
         db.images.create_index("image_id", unique=True)
         db.labels.create_index("label_id", unique=True)
@@ -191,15 +202,16 @@ def setup_database():
         db.image_datasets.create_index([("image_id", 1), ("dataset_id", 1)])
         print("   ✅ 索引创建完成")
         
-        # 7. 验证数据
+        # 8. 验证数据
         print("\n✅ 数据验证:")
         print(f"   📊 数据集: {db.datasets.count_documents({})}")
         print(f"   🖼️ 图片: {db.images.count_documents({})}")
         print(f"   🏷️ 标签: {db.labels.count_documents({})}")
         print(f"   📝 标注: {db.annotations.count_documents({})}")
         print(f"   🔗 图片-数据集关联: {db.image_datasets.count_documents({})}")
+        print(f"   🔢 序列集合: {db.sequences.count_documents({})}")
         
-        # 8. 显示数据结构示例
+        # 9. 显示数据结构示例
         print("\n📋 数据结构预览:")
         
         print("\n   标注表结构:")

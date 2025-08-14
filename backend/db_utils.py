@@ -85,9 +85,28 @@ class SequenceGenerator:
         result = self.db.sequences.find_one({"_id": sequence_name})
         return result["sequence_value"] if result else 0
 
+def get_next_sequence_value(db, sequence_name):
+    """
+    获取一个序列的下一个值（原子操作）
+    
+    Args:
+        db: MongoDB数据库连接
+        sequence_name: 序列名称
+    
+    Returns:
+        int: 下一个序列值
+    """
+    sequence_doc = db.sequences.find_one_and_update(
+        {"_id": sequence_name},
+        {"$inc": {"sequence_value": 1}},
+        return_document=True,
+        upsert=True  # 如果序列不存在则创建
+    )
+    return sequence_doc['sequence_value']
+
 def get_next_annotation_id(db):
     """
-    获取下一个标注ID的便捷函数
+    获取下一个标注记录ID (保留旧函数，内部调用新函数)
     
     Args:
         db: MongoDB数据库连接
@@ -95,13 +114,7 @@ def get_next_annotation_id(db):
     Returns:
         int: 下一个唯一的标注ID
     """
-    generator = SequenceGenerator(db)
-    
-    # 获取当前数据库中最大的record_id作为初始值
-    max_record = db.annotations.find_one({}, sort=[("record_id", -1)])
-    initial_value = max_record.get("record_id", 0) if max_record else 0
-    
-    return generator.get_next_sequence_value("annotations_record_id", initial_value)
+    return get_next_sequence_value(db, "annotations_record_id")
 
 def cleanup_database():
     """清理数据库中的重复记录并设置自增序列"""

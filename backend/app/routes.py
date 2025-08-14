@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 # 添加后端目录到系统路径，用于导入数据库工具和配置
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from db_utils import get_next_annotation_id
+from db_utils import get_next_annotation_id, get_next_sequence_value
 from config import MONGO_URI, MONGO_DB, UPLOAD_FOLDER, MAX_CONTENT_LENGTH
 
 # 连接MongoDB
@@ -76,6 +76,10 @@ USERS = [
     {"username": "student", "password": "student123", "role": "student"},
 ]
 
+# 内存数据（当数据库不可用时使用）
+IMAGES = []
+ANNOTATIONS = []
+
 bp = Blueprint('api', __name__)
 
 def register_routes(app):
@@ -107,6 +111,38 @@ def get_datasets():
         current_app.logger.error(f"获取数据集失败: {e}")
         return jsonify({"msg": "error", "error": str(e)}), 500
 
+@bp.route('/api/datasets/<int:dataset_id>/statistics', methods=['GET'])
+def get_dataset_statistics(dataset_id):
+    """获取指定数据集的统计信息（高效）"""
+    expert_id = request.args.get('expert_id')
+    role = request.args.get('role', 'student')
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+
+    try:
+        # 根据角色确定实际的expert_id
+        actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)
+
+        # 使用 count_documents 进行高效计数
+        total_count = db.image_datasets.count_documents({"dataset_id": dataset_id})
+        
+        annotated_count = db.annotations.count_documents({
+            "dataset_id": dataset_id,
+            "expert_id": actual_expert_id
+        })
+
+        stats = {
+            "total_count": total_count,
+            "annotated_count": annotated_count
+        }
+        
+        return jsonify(stats)
+
+    except Exception as e:
+        current_app.logger.error(f"获取数据集统计失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
 @bp.route('/api/admin/datasets', methods=['POST'])
 def create_dataset():
     """创建新数据集（仅管理员）"""
@@ -128,11 +164,8 @@ def create_dataset():
         return jsonify({"msg": "error", "error": "数据集名称不能为空"}), 400
     
     try:
-        # 获取最大数据集ID
-        max_ds = db.datasets.find_one(sort=[("id", -1)])
-        next_id = 1
-        if max_ds:
-            next_id = max_ds.get('id', 0) + 1
+        # 使用序列生成唯一的 dataset_id
+        next_id = get_next_sequence_value(db, "datasets_id")
         
         # 创建数据集记录
         new_dataset = {
@@ -258,17 +291,11 @@ def upload_dataset_images(dataset_id):
     if not files or len(files) == 0:
         return jsonify({"msg": "error", "error": "没有选择图片"}), 400
     
+    uploaded_images = []
+    failed_images = []
+    
     try:
-        # 获取当前最大image_id
-        max_img = db.images.find_one(sort=[("image_id", -1)])
-        next_id = 1
-        if max_img:
-            next_id = max_img.get('image_id', 0) + 1
-        
-        uploaded_images = []
-        failed_images = []
-        
-        for i, file in enumerate(files):
+        for file in files:
             if file.filename == '':
                 continue
             
@@ -282,8 +309,10 @@ def upload_dataset_images(dataset_id):
                 file_path = os.path.join(UPLOAD_FOLDER, filename)
                 file.save(file_path)
                 
+                # 使用序列生成唯一的 image_id
+                image_id = get_next_sequence_value(db, "images_id")
+                
                 # 记录图片信息
-                image_id = next_id + i
                 image_record = {
                     "image_id": image_id,
                     "image_path": f"static/img/{filename}"
@@ -537,44 +566,34 @@ def get_labels():
             
             # 尝试从MongoDB获取特定数据集的标签
             labels_data = list(db.labels.find({"dataset_id": processed_ds_id}, {"_id": 0}))
+            
+            # 如果没有找到特定数据集的标签，返回所有标签（兼容旧数据）
+            if not labels_data:
+                current_app.logger.info(f"数据集 {processed_ds_id} 没有专用标签，使用通用标签")
+                labels_data = list(db.labels.find({}, {"_id": 0}))
         else:
             # 如果没有提供dataset_id，返回所有标签
             labels_data = list(db.labels.find({}, {"_id": 0}))
         
-        return jsonify(labels_data)
+        # 标准化标签数据格式，确保兼容性
+        standardized_labels = []
+        for label in labels_data:
+            standardized_label = {
+                "label_id": label.get("label_id"),
+                "name": label.get("name") or label.get("label_name"),  # 兼容两种字段名
+                "dataset_id": label.get("dataset_id", processed_ds_id if ds_id else None)
+            }
+            standardized_labels.append(standardized_label)
         
-        if labels_data:
-            # 按label_id排序确保顺序一致
-            labels_data.sort(key=lambda x: x.get('label_id', 0))
-            return jsonify(labels_data)
-        else:
-            # 备用数据 - 从内存中过滤该数据集的标签
-            current_app.logger.info(f"数据集 {processed_ds_id} 标签未找到，使用备用数据")
-            
-            # 对于整数dataset_id，查找匹配的标签
-            if isinstance(processed_ds_id, int):
-                backup_labels = [l for l in LABELS if l['dataset_id'] == processed_ds_id]
-                if backup_labels:
-                    backup_labels.sort(key=lambda x: x.get('label_id', 0))
-                    return jsonify(backup_labels)
-            
-            # 默认标签（适用于字符串dataset_id或找不到匹配标签的情况）
-            return jsonify([
-                {"dataset_id": processed_ds_id, "label_id": 1, "name": "正常"},
-                {"dataset_id": processed_ds_id, "label_id": 2, "name": "异常"}
-            ])
-    
+        # 按label_id排序确保顺序一致
+        standardized_labels.sort(key=lambda x: x.get('label_id', 0))
+        
+        current_app.logger.info(f"返回标签数据: {len(standardized_labels)} 个标签")
+        return jsonify(standardized_labels)
+        
     except Exception as e:
         current_app.logger.error(f"获取标签失败: {e}")
-        # 返回默认标签
-        processed_ds_id = ds_id
-        if isinstance(ds_id, str) and ds_id.isdigit():
-            processed_ds_id = int(ds_id)
-        
-        return jsonify([
-            {"dataset_id": processed_ds_id, "label_id": 1, "name": "正常"},
-            {"dataset_id": processed_ds_id, "label_id": 2, "name": "异常"}
-        ])
+        return jsonify({"msg": "error", "error": str(e)}), 500
 
 @bp.route('/api/next_image', methods=['POST'])
 def next_image():
@@ -1047,4 +1066,120 @@ def export():
     
     except Exception as e:
         current_app.logger.error(f"❌ 通用导出失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+# 获取数据集特定标签
+@bp.route('/api/admin/datasets/<int:dataset_id>/labels', methods=['GET'])
+def get_dataset_labels(dataset_id):
+    """获取指定数据集的标签（管理员）"""
+    user_role = request.args.get('role')
+    
+    # 权限验证
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
+    try:
+        # 先查找特定数据集的标签
+        dataset_labels = list(db.labels.find({"dataset_id": dataset_id}, {"_id": 0}))
+        
+        # 如果没有找到，检查是否使用通用标签
+        if not dataset_labels:
+            # 获取通用标签
+            dataset_labels = list(db.labels.find({"dataset_id": None}, {"_id": 0}))
+            current_app.logger.info(f"数据集 {dataset_id} 没有专用标签，使用通用标签")
+        
+        return jsonify(dataset_labels)
+        
+    except Exception as e:
+        current_app.logger.error(f"获取数据集标签失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+# 更新数据集标签
+@bp.route('/api/admin/datasets/<int:dataset_id>/labels', methods=['PUT'])
+def update_dataset_labels(dataset_id):
+    """更新数据集标签（管理员）"""
+    data = request.json
+    user_role = data.get('role')
+    
+    # 权限验证
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
+    labels = data.get('labels', [])
+    
+    try:
+        # 删除该数据集所有现有标签
+        db.labels.delete_many({"dataset_id": dataset_id})
+        
+        # 插入新标签
+        if labels:
+            # 获取当前最大label_id
+            max_label = db.labels.find_one(sort=[("label_id", -1)])
+            next_id = 1
+            if max_label:
+                next_id = max_label.get('label_id', 0) + 1
+                
+            # 准备插入的标签数据
+            label_records = []
+            for i, label in enumerate(labels):
+                label_records.append({
+                    "label_id": next_id + i,
+                    "label_name": label.get('name'),
+                    "category": label.get('category', '病理学'),
+                    "dataset_id": dataset_id
+                })
+            
+            # 批量插入标签
+            if label_records:
+                result = db.labels.insert_many(label_records)
+                current_app.logger.info(f"更新数据集 {dataset_id} 标签：添加 {len(result.inserted_ids)} 个标签")
+        
+        return jsonify({
+            "msg": "success", 
+            "updated_labels": len(labels)
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"更新标签失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+# 修正数据集图片计数
+@bp.route('/api/admin/datasets/<int:dataset_id>/recount', methods=['POST'])
+def recount_dataset_images(dataset_id):
+    """重新计算数据集图片数量（修正统计错误）"""
+    user_role = request.json.get('role')
+    
+    # 权限验证
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    if not USE_DATABASE:
+        return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
+    
+    try:
+        # 计算实际图片数量
+        actual_count = db.image_datasets.count_documents({"dataset_id": dataset_id})
+        
+        # 更新数据集记录
+        db.datasets.update_one(
+            {"id": dataset_id},
+            {"$set": {"image_count": actual_count}}
+        )
+        
+        current_app.logger.info(f"数据集 {dataset_id} 图片数量重新计算: {actual_count} 张")
+        
+        return jsonify({
+            "msg": "success", 
+            "dataset_id": dataset_id,
+            "image_count": actual_count
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"重新计算图片数量失败: {e}")
         return jsonify({"msg": "error", "error": str(e)}), 500
