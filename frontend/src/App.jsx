@@ -1387,7 +1387,7 @@ function DatasetManager({ user, role, onBack }) {
                       }
                     }}
                   >
-                  检查并修正图片数量统计
+                  修正统计
                   </button>
                   <button 
                     className="btn-text delete-btn" 
@@ -2316,9 +2316,25 @@ input[type="password"], input[type="text"] {
 
 .btn-text:hover {
   color: #0984e3;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
+
+.btn-text::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+  transition: left 0.5s;
+}
+
+.btn-text:hover::before {
+  left: 100%;
+}
+
 
 .form-actions {
   display: flex;
@@ -2431,18 +2447,19 @@ input[type="password"], input[type="text"] {
 
 .dataset-table-header {
   display: grid;
-  grid-template-columns: 60px 1fr 100px 80px;
+  grid-template-columns: 60px 1fr 100px 300px;
   gap: 16px;
   padding: 16px;
   background: #f8fafc;
   font-weight: 600;
   color: #2c3e50;
   border-bottom: 1px solid #e1e8ed;
+  justify-content: flex-start;
 }
-
+  
 .dataset-table-row {
   display: grid;
-  grid-template-columns: 60px 1fr 100px 80px;
+  grid-template-columns: 60px 1fr 100px 300px;
   gap: 16px;
   padding: 16px;
   border-bottom: 1px solid #f1f3f4;
@@ -2474,24 +2491,21 @@ input[type="password"], input[type="text"] {
 .col-actions {
   text-align: center;
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  min-width: 200px;
+  min-width: 150px;
 }
 
 .delete-btn {
   background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
   color: #c62828;
-  border-color: #ef5350;
 }
 
 .delete-btn:hover {
+  color: #c0392b;
   background: linear-gradient(135deg, #ffcdd2 0%, #ef9a9a 100%);
-  color: #b71c1c;
-  border-color: #f44336;
-  box-shadow: 0 4px 16px rgba(198, 40, 40, 0.3);
 }
 
 .manage-btn {
@@ -2499,10 +2513,12 @@ input[type="password"], input[type="text"] {
   margin-right: 8px;
   font-size: 13px;
   font-weight: 600;
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
 }
 
 .manage-btn:hover {
   color: #0d4f8c;
+  background: linear-gradient(135deg, #bbdefb 0%, #90caf9 100%);
 }
 
 .fix-btn {
@@ -2510,11 +2526,12 @@ input[type="password"], input[type="text"] {
   margin-right: 8px;
   font-size: 13px;
   font-weight: 600;
-  
+  background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
 }
 
 .fix-btn:hover {
   color: #059669;
+  background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
 }
 
 .back-btn {
