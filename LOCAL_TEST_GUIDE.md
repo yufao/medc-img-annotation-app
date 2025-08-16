@@ -49,12 +49,12 @@ medc-img-annotation-app/
    ./start_frontend.sh
    ```
 
-### 方法2: 使用Mock数据模式
+### 方法2: 简化本地运行
 
-如果无法连接MongoDB，系统会自动使用Mock数据模式：
+若暂时不配置 MongoDB，可直接启动后端与前端，仅用于界面联调（部分接口依赖数据库会不可用）：
 
 ```bash
-# 启动后端（自动回退到Mock模式）
+# 启动后端
 cd /home/droot/medc-img-annotation-app/backend
 ./run_test.sh
 
@@ -76,7 +76,7 @@ cd /home/droot/medc-img-annotation-app/frontend
 1. 编辑`.env`文件设置正确的MongoDB URI
 2. 运行连接测试：`python3 test_mongodb.py`
 
-详细配置说明请参考：`backend/MONGODB_SETUP.md`
+确保 Windows 端 MongoDB 对外可访问，Linux 端 `.env` MONGODB_URI 指向 Windows IP。
 
 ### 2. 环境变量配置
 
@@ -163,7 +163,7 @@ python3 test_mongodb.py --help
 ### 端口冲突
 如果端口被占用，修改以下配置：
 - 后端：修改`.env`中的`FLASK_PORT`
-- 前端：修改`vite.config.ts`中的端口设置
+- 前端：修改`vite.config.js`中的端口设置
 
 ### 防火墙问题
 确保以下端口开放：

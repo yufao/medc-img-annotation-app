@@ -1,32 +1,45 @@
 
 # 医学图像标注系统前端
 
-本项目为医学图像标注系统的前端部分，基于 React + Vite 构建。
+React + Vite 实现的前端应用，连接后端 Flask API 完成数据集管理与标注。
 
-## 项目结构
+## 结构
 
-- `src/`：前端源代码目录，包含主入口和核心组件。
-- `index.html`：主页面模板，挂载 React 应用。
-- `vite.config.js`：Vite 配置文件，包含开发代理等设置。
+- `src/`：源代码，核心在 `App.jsx`
+- `vite.config.js`：开发代理（转发 `/api` 与 `/static` 到后端 5000）
+- `start_frontend.sh`：开发模式启动脚本
 
-## 启动开发环境
+## 开发启动
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev   # 或 ./start_frontend.sh
 ```
 
-浏览器访问 [http://localhost:3000](http://localhost:3000)
+访问 http://localhost:3000
 
-## 代理说明
+## 取图与提交流程（与后端配合）
 
-前端通过 `vite.config.js` 配置了 `/api` 和 `/static` 的代理，开发时会自动转发到后端服务（默认端口 5000）。
+- 入口组件：`src/App.jsx` 中的 `Annotate`
+- 获取图片：
+	- 有 image_id 时，先从 `/images_with_annotations` 精确取该图与标注
+	- 无 image_id 时：
+		1) `/images_with_annotations` 全量 -> 选第一张未标注
+		2) 无未标注则 `/datasets/{id}/statistics` 核验是否完成
+		3) 如统计仍显示未完成，回退 `/next_image`
+		4) 仍无则显示“已完成”
+- 提交后：重复上述逻辑，避免误判
 
-## 主要文件注释说明
+2025-08-16：修复“仍有未标注却提示完成”的问题，具体实现见 `App.jsx` 中 `fetchImage` 与 `handleSubmit`。
 
-- `index.html`：页面基础设置，挂载点及入口说明。
-- `src/main.jsx`：React 应用入口，负责挂载主组件。
-- `src/App.jsx`：包含详细注释，说明各组件和核心逻辑。
+## 故障排查
 
-如需进一步开发或部署，请参考后端 README 及相关文档。
+- 无法加载图片：检查浏览器控制台与网络面板；确认 `/static/img/...` 是否可访问
+- 标注后未跳转：查看控制台日志（前端已添加详细日志），确认后端 `/next_image`、`/images_with_annotations` 响应
+
+## 主要文件
+
+- `index.html`：主模板
+- `src/main.jsx`：入口挂载
+- `src/App.jsx`：页面、数据流与标注逻辑（已补充详细注释）

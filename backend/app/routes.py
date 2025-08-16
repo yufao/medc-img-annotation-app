@@ -362,6 +362,12 @@ def upload_dataset_images(dataset_id):
 # 获取指定数据集下所有图片及标注（供选择进入和修改）
 @bp.route('/api/images_with_annotations', methods=['POST'])
 def images_with_annotations():
+    """
+    获取图片列表并合并当前角色的标注信息（可分页）。
+    输入：{ dataset_id, expert_id(username), role, include_all, page, pageSize }
+    输出：[{ image_id, filename, image_path, annotation? }]
+    说明：当 include_all=False 时仅返回未标注图片；True 则返回全部。
+    """
     data = request.json
     ds_id = data.get('dataset_id')
     expert_id = data.get('expert_id')
@@ -447,6 +453,10 @@ def images_with_annotations():
 # 添加新的API端点：获取数据集图片（备用方案）
 @bp.route('/api/datasets/<int:dataset_id>/images', methods=['GET'])
 def get_dataset_images(dataset_id):
+    """
+    备用图片列表接口，不附带过滤；用于前端回退与联动。
+    查询：expert_id, role, page, pageSize
+    """
     expert_id = request.args.get('expert_id')
     role = request.args.get('role', 'student')
     page = int(request.args.get('page', 1))
@@ -514,6 +524,7 @@ def get_dataset_images(dataset_id):
 # 获取上一张图片（根据当前图片ID）
 @bp.route('/api/prev_image', methods=['POST'])
 def prev_image():
+    """根据当前 image_id 返回同数据集上一张图片（按 image_id 排序）。"""
     data = request.json
     ds_id = data.get('dataset_id')
     curr_image_id = data.get('image_id')
@@ -551,6 +562,7 @@ def prev_image():
     
 @bp.route('/api/labels', methods=['GET'])
 def get_labels():
+    """获取标签列表，优先返回指定数据集的标签，否则返回通用标签。"""
     """获取标签列表接口"""
     ds_id = request.args.get('dataset_id')
     
@@ -597,7 +609,11 @@ def get_labels():
 
 @bp.route('/api/next_image', methods=['POST'])
 def next_image():
-    # 获取下一个待标注图片接口（基于角色的独立进度）
+    """
+    获取下一个待标注图片（基于角色独立进度）。
+    输入：{ dataset_id, expert_id(username), role }
+    输出：{ image_id, filename } 或 { msg: 'done' }
+    """
     data = request.json
     ds_id = data.get('dataset_id')
     expert_id = data.get('expert_id')
@@ -661,7 +677,12 @@ def next_image():
 
 @bp.route('/api/annotate', methods=['POST'])
 def annotate():
-    # 提交标注结果接口（支持基于角色的独立标注）
+    """
+    提交或更新标注结果（同一图片+角色 upsert）。
+    输入：{ dataset_id, image_id, expert_id(username), label, tip? }
+    输出：{ msg: 'saved', expert_id }
+    说明：内部会将用户名映射为实际 expert_id（按角色）。
+    """
     data = request.json
     ds_id = data.get('dataset_id')
     image_id = data.get('image_id')

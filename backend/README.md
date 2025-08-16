@@ -1,115 +1,92 @@
 # 医学图像标注系统后端
 
-基于Flask的医学图像标注系统后端，支持高并发标注操作，使用MongoDB存储数据。
+Flask + MongoDB 实现的后端服务，提供数据集管理、图片与标注、导出等 API，支持按角色（admin/doctor/student）区分标注进度。
 
 ## 🚀 快速开始
 
-### 环境要求
+### 环境
 - Python 3.8+
 - MongoDB 4.0+
-- 推荐使用虚拟环境
 
-### 安装和启动
-
+### 启动
 ```bash
 cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 初始化数据库（首次运行）
+# 可选：初始化演示数据
 python setup_database.py
 
-# 启动服务
+# 运行
 python run.py
 ```
 
-### 环境配置
-
-创建 `.env` 文件：
+`.env` 示例：
 ```env
-MONGODB_URI=mongodb://172.20.48.1:27017/local
-MONGODB_DB=local
+MONGODB_URI=mongodb://localhost:27017/
+MONGODB_DB=medical_annotation
+UPLOAD_FOLDER=app/static/img
+FLASK_DEBUG=True
 ```
 
-## 📖 API文档
+## � 关键端点
 
-启动服务后访问：http://localhost:5000/doc
+- 登录：`POST /api/login`
+- 数据集：`GET /api/datasets`，`GET /api/datasets/{id}/statistics`
+- 标签：`GET /api/labels`（可带 dataset_id），管理员增改查见 routes
+- 图片列表：
+	- `POST /api/images_with_annotations`（支持 include_all 分页，返回 annotation 字段）
+	- `GET  /api/datasets/{id}/images`（备用列表接口）
+- 下一张/上一张：`POST /api/next_image`，`POST /api/prev_image`
+- 提交/更新标注：`POST /api/annotate`，`POST /api/update_annotation`
+- 导出：`GET /api/export`（dataset_id/expert_id 可选）
 
-## 🔧 核心特性
+说明：`/api/next_image` 会优先返回“当前角色在该数据集中第一张未标注”的图片；`/api/images_with_annotations` 可一次性返回带标注合并信息列表，供前端优先筛选“未标注”。
 
-- **并发安全的ID生成**：使用MongoDB原子操作生成唯一record_id
-- **多角色支持**：支持doctor、student等不同角色的标注
-- **数据导出**：支持Excel格式的标注数据导出
-- **图像管理**：支持多数据集的图像分类和管理
+## 📌 与前端协同（取图与提交流程）
 
-## 🧪 测试
+前端在 2025-08-16 更新后：
+1) 无指定 image_id 时，先调用 `/api/images_with_annotations` 取全量，再选第一张未标注；如无未标注，再通过 `/api/datasets/{id}/statistics` 确认是否完成，必要时回退 `/api/next_image`；仍无则视为完成。
+2) 提交后同样逻辑以避免误判“已完成”。
 
-```bash
-# 测试标注功能
-python test_annotation.py
-
-# 并发压力测试
-python concurrent_test.py
-
-# 测试导出功能
-python test_export.py
-```
-
-## 📁 项目结构
+## 📁 结构
 
 ```
 backend/
-├── app/                          # Flask应用
-│   ├── __init__.py
-│   ├── routes.py                 # API路由
-│   └── static/                   # 静态文件
-├── db_utils.py                   # 数据库工具（自增序列、清理等）
-├── setup_database.py             # 数据库初始化
-├── test_annotation.py            # 标注功能测试
-├── concurrent_test.py            # 并发测试
-├── test_export.py               # 导出功能测试
-├── requirements.txt              # 依赖包
-├── run.py                       # 应用入口
-└── README.md                    # 项目文档
+├── app/
+│   ├── routes.py         # API 路由
+│   ├── static/img/       # 图片目录
+│   └── templates/        # （如有）
+├── config.py             # 配置（读取 .env）
+├── db_utils.py           # 序列与工具
+├── run.py                # 启动入口
+├── requirements.txt
+└── README.md
 ```
 
-## 🛠️ 维护和监控
+## 🧪 脚本
 
-### 检查系统状态
 ```bash
-# 检查序列状态
-python db_utils.py status
+# 基础测试
+python test_annotation.py
+python concurrent_test.py
+python test_export.py
 
-# 查看数据库内容
-python setup_database.py --show
-```
-
-### 数据库维护
-如果遇到record_id重复问题，运行清理脚本：
-```bash
-python db_utils.py cleanup
-```
-
-检查序列状态：
-```bash
-python db_utils.py status
-```
-
-运行简单并发测试：
-```bash
-python db_utils.py test
+# 简单启动
+./run_test.sh
 ```
 
 ## 📊 数据结构
 
-### 核心集合
-- **annotations**: 标注数据（dataset_id, record_id, image_id, expert_id, label_id, tip, datetime）
-- **images**: 图像信息（image_id, image_path, dataset_id）
-- **labels**: 标签定义（label_id, label_name, category）
-- **datasets**: 数据集管理（id, name, description）
-- **sequences**: 自增序列（_id, sequence_value）
+- annotations(dataset_id, record_id, image_id, expert_id, label_id, tip, datetime)
+- images(image_id, image_path)
+- datasets(id, name, description, created_at, image_count, status)
+- image_datasets(dataset_id, image_id)
+- labels(label_id, label_name, category, dataset_id)
+- sequences(_id, sequence_value)
 
-## 🔒 并发安全
+## 🔒 并发与一致性
 
-系统使用MongoDB的`findOneAndUpdate`原子操作确保record_id的唯一性，完全解决了高并发环境下的重复键问题。所有数据库工具已整合到`db_utils.py`中，提供统一的接口。
+- 使用 `findOneAndUpdate` 自增序列保证 record_id 唯一
+- 标注更新采用 upsert 逻辑（新增/覆盖）避免重复

@@ -316,6 +316,9 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
     // eslint-disable-next-line
   }, [dataset, user]);
 
+  // 获取图片：
+  // - 有 id：精准加载该图及其标注
+  // - 无 id：优先取第一张未标注；若没有则用统计核验；若统计未完成再回退 next_image；仍无则视为完成
   const fetchImage = async (id) => {
     setIsLoading(true);
     setError(null);
@@ -344,62 +347,93 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
           setIsImageSelected(false);
           return;
         } else {
-          setImg(null);
-          setLabel('');
-          setRemark('');
-          setImageId(null);
-          return;
+          console.warn(`找不到图片ID: ${id}`);
+          // 如果找不到指定图片，继续下面的逻辑获取下一张
         }
       }
-      // 获取下一个待标注图片（根据当前用户角色）
-      const { data } = await api.post('/next_image', {
-        expert_id: user,
+      
+      // 获取所有图片及标注信息，优先显示未标注的图片
+      const allImagesResponse = await api.post('/images_with_annotations', {
         dataset_id: dataset.id,
-        role: role // 添加角色信息，确保不同角色的进度独立
+        expert_id: user,
+        role: role,
+        include_all: true
       });
-      if (data.image_id) {
-        // 检查返回的图片是否已经标注过，如果是则尝试获取真正未标注的图片
-        try {
-          const checkData = await api.post('/images_with_annotations', {
-            dataset_id: dataset.id,
-            expert_id: user,
-            image_id: data.image_id
-          });
-          if (checkData.data.length > 0 && checkData.data[0].annotation) {
-            const allImagesData = await api.post('/images_with_annotations', {
-              dataset_id: dataset.id,
-              expert_id: user,
-              role: role,
-              include_all: true
-            });
-            const unAnnotatedImage = allImagesData.data.find(img => !img.annotation);
-            if (unAnnotatedImage) {
-              setImg(unAnnotatedImage);
-              setLabel('');
-              setRemark('');
-              setImageId(unAnnotatedImage.image_id);
-            } else {
-              setImg({ completed: true });
-              setImageId(null);
-            }
-          } else {
-            setImg({ image_id: data.image_id, filename: data.filename });
-            setLabel('');
-            setRemark('');
-            setImageId(data.image_id);
-          }
-        } catch (error) {
-          setImg({ image_id: data.image_id, filename: data.filename });
-          setLabel('');
-          setRemark('');
-          setImageId(data.image_id);
-        }
+      
+      const allImages = allImagesResponse.data;
+      console.log(`获取到数据集${dataset.id}的所有图片:`, allImages.length, '张');
+      
+      // 找到第一个未标注的图片
+      const unAnnotatedImage = allImages.find(img => !img.annotation);
+      
+      if (unAnnotatedImage) {
+        console.log(`找到未标注图片: ID ${unAnnotatedImage.image_id}`);
+        setImg(unAnnotatedImage);
+        setLabel('');
+        setRemark('');
+        setImageId(unAnnotatedImage.image_id);
         setImageScale(1);
         setImageOffset({ x: 0, y: 0 });
         setIsImageSelected(false);
       } else {
-        setImg({ completed: true });
-        setImageId(null);
+        // 获取统计信息再次确认
+        try {
+          const statsResponse = await api.get(`/datasets/${dataset.id}/statistics`, {
+            params: { 
+              expert_id: user, 
+              role: role,
+              dataset_id: dataset.id
+            }
+          });
+          
+          const stats = statsResponse.data;
+          const annotatedCount = stats.annotated_count || 0;
+          const totalCount = stats.total_count || 0;
+          
+          console.log(`统计信息确认: 已标注${annotatedCount}张，总计${totalCount}张`);
+          
+          if (annotatedCount >= totalCount && totalCount > 0) {
+            // 确实全部标注完成
+            console.log('确认所有图片已标注完成');
+            setImg({ completed: true });
+            setImageId(null);
+          } else {
+            // 统计数据显示还有未标注的，但获取不到图片，可能是数据不一致
+            console.warn('数据不一致：统计显示有未标注图片，但找不到具体图片');
+            
+            // 尝试使用 /next_image 接口
+            const nextImageResponse = await api.post('/next_image', {
+              expert_id: user,
+              dataset_id: dataset.id,
+              role: role
+            });
+            
+            if (nextImageResponse.data.image_id) {
+              console.log(`通过next_image找到图片: ${nextImageResponse.data.image_id}`);
+              setImg({ 
+                image_id: nextImageResponse.data.image_id, 
+                filename: nextImageResponse.data.filename 
+              });
+              setLabel('');
+              setRemark('');
+              setImageId(nextImageResponse.data.image_id);
+              setImageScale(1);
+              setImageOffset({ x: 0, y: 0 });
+              setIsImageSelected(false);
+            } else {
+              // 如果还是找不到，显示完成状态
+              console.log('next_image也没有返回图片，标注完成');
+              setImg({ completed: true });
+              setImageId(null);
+            }
+          }
+        } catch (statsError) {
+          console.error("获取统计信息失败:", statsError);
+          // 如果统计接口失败，但我们从allImages中没找到未标注的图片，
+          // 可能真的完成了，显示完成状态
+          setImg({ completed: true });
+          setImageId(null);
+        }
       }
     } catch (error) {
       console.error("获取图片失败:", error);
@@ -410,7 +444,8 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
     }
   };
 
-  const handleSubmit = async () => { // 定义 handleSubmit 函数
+  // 提交标注：提交成功后按“未标注优先 -> 统计核验 -> next_image 回退 -> 完成”流程获取下一张
+  const handleSubmit = async () => {
     if (!label) {
       console.warn("请选择标签");
       setError("请选择标签");
@@ -438,32 +473,81 @@ function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
       setLabel('');
       setRemark('');
       
-      // 提交后，优先寻找未标注的图片
+      // 提交后，重新获取图片（优先获取未标注的）
       try {
-        const allImagesData = await api.post('/images_with_annotations', {
+        // 获取所有图片及标注信息
+        const allImagesResponse = await api.post('/images_with_annotations', {
           dataset_id: dataset.id,
           expert_id: user,
           role: role,
           include_all: true
         });
+        
+        const allImages = allImagesResponse.data;
+        console.log(`提交后获取到所有图片: ${allImages.length}张`);
+        
         // 找到第一个未标注的图片
-        const unAnnotatedImage = allImagesData.data.find(img => !img.annotation);
+        const unAnnotatedImage = allImages.find(img => !img.annotation);
+        
         if (unAnnotatedImage) {
+          console.log(`找到下一张未标注图片: ID ${unAnnotatedImage.image_id}`);
           setImg(unAnnotatedImage);
           setImageId(unAnnotatedImage.image_id);
-          // 重置图片查看状态
           setImageScale(1);
           setImageOffset({ x: 0, y: 0 });
           setIsImageSelected(false);
         } else {
-          // 所有图片都已标注完成
-          setImg({ completed: true });
-          setImageId(null);
+          // 没有找到未标注的图片，获取统计信息确认
+          const statsResponse = await api.get(`/datasets/${dataset.id}/statistics`, {
+            params: { 
+              expert_id: user, 
+              role: role,
+              dataset_id: dataset.id
+            }
+          });
+          
+          const stats = statsResponse.data;
+          const annotatedCount = stats.annotated_count || 0;
+          const totalCount = stats.total_count || 0;
+          
+          console.log(`提交后统计: 已标注${annotatedCount}张，总计${totalCount}张`);
+          
+          if (annotatedCount >= totalCount && totalCount > 0) {
+            // 确实全部标注完成
+            console.log('提交后确认所有图片已标注完成');
+            setImg({ completed: true });
+            setImageId(null);
+          } else {
+            // 数据可能不一致，尝试使用next_image接口
+            const nextImageResponse = await api.post('/next_image', {
+              expert_id: user,
+              dataset_id: dataset.id,
+              role: role
+            });
+            
+            if (nextImageResponse.data.image_id) {
+              console.log(`通过next_image找到下一张图片: ${nextImageResponse.data.image_id}`);
+              setImg({ 
+                image_id: nextImageResponse.data.image_id, 
+                filename: nextImageResponse.data.filename 
+              });
+              setImageId(nextImageResponse.data.image_id);
+              setImageScale(1);
+              setImageOffset({ x: 0, y: 0 });
+              setIsImageSelected(false);
+            } else {
+              console.log('next_image也没有返回图片，标注完成');
+              setImg({ completed: true });
+              setImageId(null);
+            }
+          }
         }
       } catch (error) {
-        console.error("获取下一张图片失败，使用备用方法:", error);
+        console.error("获取下一张图片失败:", error);
+        // 如果获取失败，回退到原来的fetchImage方法
         fetchImage();
       }
+      
       fetchCounts(true); // 强制刷新计数
     } catch (error) {
       console.error("提交标注失败:", error);
