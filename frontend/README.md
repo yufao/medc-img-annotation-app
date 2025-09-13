@@ -1,33 +1,33 @@
 
-# 医学图像标注系统前端
+# 前端说明
 
-React + Vite 实现的前端应用，连接后端 Flask API 完成数据集管理与标注。
+React + Vite 实现的医学图像标注系统前端。
 
-## 结构
-
-- `src/`：源代码，核心在 `App.jsx`
-- `vite.config.js`：开发代理（转发 `/api` 与 `/static` 到后端 5000）
-- `start_frontend.sh`：开发模式启动脚本
-
-## 开发启动
+## 快速开始
 
 ```bash
 cd frontend
 npm install
-npm run dev   # 或 ./start_frontend.sh
+npm run dev
 ```
 
 访问 http://localhost:3000
 
-## 取图与提交流程（与后端配合）
+## 主要功能
 
-- 入口组件：`src/App.jsx` 中的 `Annotate`
-- 获取图片：
-	- 有 image_id 时，先从 `/images_with_annotations` 精确取该图与标注
-	- 无 image_id 时：
-		1) `/images_with_annotations` 全量 -> 选第一张未标注
-		2) 无未标注则 `/datasets/{id}/statistics` 核验是否完成
-		3) 如统计仍显示未完成，回退 `/next_image`
+- 数据集管理
+- 图像标注
+- 用户管理
+- 进度统计
+- 数据导出
+
+## 开发说明
+
+- 核心代码在 `src/App.jsx`
+- Vite 配置代理到后端 5000 端口
+- 使用 React Hooks 管理状态
+
+更多详情请参考主项目 README.md
 		4) 仍无则显示“已完成”
 - 提交后：重复上述逻辑，避免误判
 

@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # MongoDB数据库
+  mongodb:
+    image: mongo:4.4
+    container_name: medc-mongodb-prod
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./logs/mongodb:/var/log/mongodb
+    environment:
+      - MONGO_INITDB_DATABASE=medcimgdb
+    networks:
+      - medc-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  # 后端API服务
+  backend:
+    image: yfsdk/medc-backend:latest
+    container_name: medc-backend-prod
+    restart: always
+    ports:
+      - "5000:5000"
+    volumes:
+      # 数据持久化
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # 静态文件映射（确保图片可访问）
+      - ./static:/app/static
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/medcimgdb
+      - MONGODB_DB=medcimgdb
+      - ENV=production
+      - PORT=5000
+      - LOG_LEVEL=INFO
+    depends_on:
+      - mongodb
+    networks:
+      - medc-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 前端服务
+  frontend:
+    image: yfsdk/medc-frontend:v1
+    container_name: medc-frontend-prod
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - medc-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  medc-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local

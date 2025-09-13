@@ -1,33 +1,35 @@
-# 医学图像标注系统后端
+# 后端说明
 
-Flask + MongoDB 实现的后端服务，提供数据集管理、图片与标注、导出等 API，支持按角色（admin/doctor/student）区分标注进度。
+Flask + MongoDB 实现的医学图像标注系统后端服务。
 
-## 🚀 快速开始
+## 快速开始
 
-### 环境
-- Python 3.8+
-- MongoDB 4.0+
-
-### 启动
 ```bash
 cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# 可选：初始化演示数据
-python setup_database.py
-
-# 运行
 python run.py
 ```
 
-`.env` 示例：
-```env
-MONGODB_URI=mongodb://localhost:27017/
-MONGODB_DB=medical_annotation
-UPLOAD_FOLDER=app/static/img
-FLASK_DEBUG=True
+## 主要功能
+
+- 用户认证与角色管理
+- 数据集管理
+- 图像上传与存储
+- 标注数据管理
+- 进度统计
+- Excel 导出
+
+## API 文档
+
+- `/api/login` - 用户登录
+- `/api/datasets` - 数据集管理
+- `/api/images` - 图像管理
+- `/api/annotations` - 标注管理
+- `/api/export` - 数据导出
+
+更多详情请参考主项目 README.md
 ```
 
 ## � 关键端点
