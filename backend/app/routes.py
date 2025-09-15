@@ -13,6 +13,8 @@ from werkzeug.utils import secure_filename
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db_utils import get_next_annotation_id, get_next_sequence_value
 from config import MONGO_URI, MONGO_DB, UPLOAD_FOLDER, MAX_CONTENT_LENGTH
+from app.json_utils import safe_jsonify
+from app.user_config import SYSTEM_USERS, ROLE_TO_EXPERT_ID
 
 # 连接MongoDB
 try:
@@ -36,19 +38,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # 前端 <img src="/static/img/xxx.jpg"> 会自动映射到该目录
 # Flask 默认会将 static/ 目录作为静态文件根目录
 
-# 用户角色到expert_id的映射
-ROLE_TO_EXPERT_ID = {
-    "admin": 0,
-    "doctor": 1, 
-    "student": 2
-}
-
-# 用户依然用mock
-USERS = [
-    {"username": "admin", "password": "admin123", "role": "admin"},
-    {"username": "doctor", "password": "doctor123", "role": "doctor"},
-    {"username": "student", "password": "student123", "role": "student"},
-]
+# 使用配置文件中的用户数据
+USERS = SYSTEM_USERS
 """
 标注记录表结构：
 {
@@ -61,20 +52,6 @@ USERS = [
     tip: 备注
 }
 """
-
-# 用户角色到expert_id的映射
-ROLE_TO_EXPERT_ID = {
-    "admin": 0,
-    "doctor": 1, 
-    "student": 2
-}
-
-# 用户依然用mock（用于登录验证）
-USERS = [
-    {"username": "admin", "password": "admin123", "role": "admin"},
-    {"username": "doctor", "password": "doctor123", "role": "doctor"},
-    {"username": "student", "password": "student123", "role": "student"},
-]
 
 # 内存数据（当数据库不可用时使用）
 IMAGES = []
@@ -106,7 +83,7 @@ def get_datasets():
     try:
         datasets = list(db.datasets.find({}, {'_id': 0}))
         current_app.logger.info(f"获取到 {len(datasets)} 个数据集")
-        return jsonify(datasets)
+        return jsonify(safe_jsonify(datasets))
     except Exception as e:
         current_app.logger.error(f"获取数据集失败: {e}")
         return jsonify({"msg": "error", "error": str(e)}), 500
@@ -515,7 +492,7 @@ def get_dataset_images(dataset_id):
         end_idx = start_idx + page_size
         paginated_result = result[start_idx:end_idx]
         
-        return jsonify(paginated_result)
+        return jsonify(safe_jsonify(paginated_result))
         
     except Exception as e:
         current_app.logger.error(f"获取数据集图片失败: {e}")
@@ -601,7 +578,7 @@ def get_labels():
         standardized_labels.sort(key=lambda x: x.get('label_id', 0))
         
         current_app.logger.info(f"返回标签数据: {len(standardized_labels)} 个标签")
-        return jsonify(standardized_labels)
+        return jsonify(safe_jsonify(standardized_labels))
         
     except Exception as e:
         current_app.logger.error(f"获取标签失败: {e}")
@@ -665,7 +642,7 @@ def next_image():
         for img in sorted(imgs, key=lambda x: x['image_id']):
             if img['image_id'] not in done_img_ids:
                 current_app.logger.info(f"角色 {role} 的下一张图片: static/img/{img['filename']} (image_id: {img['image_id']})")
-                return jsonify({"image_id": img['image_id'], "filename": img['filename']})
+                return jsonify(safe_jsonify({"image_id": img['image_id'], "filename": img['filename']}))
         
         # 全部标注完成
         current_app.logger.info(f"角色 {role} 已完成数据集 {processed_ds_id} 的所有标注")
@@ -889,7 +866,8 @@ def export():
                 current_app.logger.info(f"从MongoDB获取到 {len(annotations_data)} 条标注数据")
                 
                 if annotations_data:
-                    # 统一标签字段名
+                    # 清理ObjectId并统一标签字段名
+                    annotations_data = safe_jsonify(annotations_data)
                     for item in annotations_data:
                         if 'label' in item and 'label_id' not in item:
                             item['label_id'] = item['label']
@@ -1204,3 +1182,51 @@ def recount_dataset_images(dataset_id):
     except Exception as e:
         current_app.logger.error(f"重新计算图片数量失败: {e}")
         return jsonify({"msg": "error", "error": str(e)}), 500
+
+@bp.route('/api/admin/users', methods=['GET'])
+def get_users():
+    """获取用户列表（仅管理员）"""
+    # 验证权限
+    user_role = request.args.get('role')
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    try:
+        # 返回用户列表，但不包含密码信息
+        users_info = []
+        for user in USERS:
+            users_info.append({
+                "username": user["username"],
+                "role": user["role"],
+                "description": user.get("description", "")
+            })
+        
+        return jsonify(safe_jsonify(users_info))
+        
+    except Exception as e:
+        current_app.logger.error(f"获取用户列表失败: {e}")
+        return jsonify({"msg": "error", "error": str(e)}), 500
+
+@bp.route('/api/admin/users/config', methods=['GET'])
+def get_user_config_info():
+    """获取用户配置信息说明（仅管理员）"""
+    # 验证权限
+    user_role = request.args.get('role')
+    if user_role != 'admin':
+        return jsonify({"msg": "error", "error": "权限不足"}), 403
+    
+    config_info = {
+        "message": "用户管理采用配置文件方式",
+        "config_file": "backend/app/user_config.py",
+        "instructions": [
+            "1. 修改 backend/app/user_config.py 文件中的 SYSTEM_USERS 配置",
+            "2. 可以添加、删除或修改用户信息",
+            "3. 修改后需要重启后端服务才能生效",
+            "4. 用户角色支持：admin（管理员）、doctor（医生）、student（学生）",
+            "5. 建议为用户设置强密码"
+        ],
+        "current_users_count": len(USERS),
+        "roles_mapping": dict(ROLE_TO_EXPERT_ID)
+    }
+    
+    return jsonify(config_info)

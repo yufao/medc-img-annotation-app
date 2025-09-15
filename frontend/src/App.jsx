@@ -138,7 +138,7 @@ function Login({ onLogin }) {
         登录
       </button>
       <div className="login-msg">{msg}</div>
-      <div className="login-tip">测试账号：admin/admin123、doctor/doctor123、student/student123</div>
+      <div className="login-tip">请使用系统分配的账号登录</div>
     </div>
   );
 }
@@ -1022,6 +1022,7 @@ function DatasetManager({ user, role, onBack }) {
   const [showUploadForm, setShowUploadForm] = useState(false);
   const [selectedDataset, setSelectedDataset] = useState(null);
   const [showLabelManager, setShowLabelManager] = useState(false);
+  const [showUserManager, setShowUserManager] = useState(false);
   const [editingDatasetId, setEditingDatasetId] = useState(null);
   const [datasetLabels, setDatasetLabels] = useState([]);
   
@@ -1193,6 +1194,7 @@ function DatasetManager({ user, role, onBack }) {
           onClick={() => {
             setShowCreateForm(true);
             setShowUploadForm(false);
+            setShowUserManager(false);
           }}
         >
           创建新数据集
@@ -1203,10 +1205,22 @@ function DatasetManager({ user, role, onBack }) {
           onClick={() => {
             setShowUploadForm(true);
             setShowCreateForm(false);
+            setShowUserManager(false);
           }}
           disabled={datasets.length === 0}
         >
           上传图片
+        </button>
+        
+        <button 
+          className="btn admin-btn" 
+          onClick={() => {
+            setShowUserManager(true);
+            setShowCreateForm(false);
+            setShowUploadForm(false);
+          }}
+        >
+          用户管理
         </button>
       </div>
       
@@ -1420,6 +1434,8 @@ function DatasetManager({ user, role, onBack }) {
         </div>
       )}
       
+      {showUserManager && <UserManager role={role} />}
+      
       <div className="datasets-list">
         <h3>现有数据集</h3>
         {loading ? (
@@ -1480,6 +1496,108 @@ function DatasetManager({ user, role, onBack }) {
                   删除
                   </button>
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UserManager({ role }) {
+  const [users, setUsers] = useState([]);
+  const [configInfo, setConfigInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchUsers();
+    fetchConfigInfo();
+  }, []);
+
+  const fetchUsers = async () => {
+    try {
+      const response = await api.get(`/admin/users?role=${role}`);
+      setUsers(response.data || []);
+    } catch (error) {
+      console.error('获取用户列表失败:', error);
+      setUsers([]);
+    }
+  };
+
+  const fetchConfigInfo = async () => {
+    try {
+      const response = await api.get(`/admin/users/config?role=${role}`);
+      setConfigInfo(response.data);
+    } catch (error) {
+      console.error('获取配置信息失败:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="form-container">
+        <h3>用户管理</h3>
+        <div className="loading-text">加载用户信息...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="form-container">
+      <h3>用户管理</h3>
+      
+      {configInfo && (
+        <div className="config-info">
+          <div className="info-title">📝 用户管理说明</div>
+          <div className="info-content">
+            <p><strong>管理方式：</strong>{configInfo.message}</p>
+            <p><strong>配置文件：</strong><code>{configInfo.config_file}</code></p>
+            <div className="instructions">
+              <strong>操作步骤：</strong>
+              <ol>
+                {configInfo.instructions.map((instruction, index) => (
+                  <li key={index}>{instruction}</li>
+                ))}
+              </ol>
+            </div>
+            <div className="stats">
+              <span>当前用户数量: <strong>{configInfo.current_users_count}</strong></span>
+              <span>角色映射: {Object.entries(configInfo.roles_mapping).map(([role, id]) => 
+                `${role}(${id})`
+              ).join(', ')}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="users-list">
+        <h4>当前系统用户</h4>
+        {users.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-title">无法获取用户信息</div>
+            <div className="empty-subtitle">请检查权限或联系系统管理员</div>
+          </div>
+        ) : (
+          <div className="user-table">
+            <div className="user-table-header">
+              <div className="col-username">用户名</div>
+              <div className="col-role">角色</div>
+              <div className="col-description">描述</div>
+            </div>
+            
+            {users.map((user, index) => (
+              <div key={index} className="user-table-row">
+                <div className="col-username">{user.username}</div>
+                <div className="col-role">
+                  <span className={`role-badge role-${user.role}`}>
+                    {user.role === 'admin' ? '管理员' : 
+                     user.role === 'doctor' ? '医生' : '学生'}
+                  </span>
+                </div>
+                <div className="col-description">{user.description}</div>
               </div>
             ))}
           </div>
@@ -2645,6 +2763,138 @@ input[type="password"], input[type="text"] {
   .progress-stats { gap: 12px; }
   .stat-number { font-size: 20px; }
   .control-buttons { flex-wrap: wrap; }
+}
+
+/* 用户管理相关样式 */
+.config-info {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.info-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+  margin-bottom: 12px;
+}
+
+.info-content p {
+  margin: 8px 0;
+  font-size: 14px;
+  color: #495057;
+}
+
+.info-content code {
+  background: #f1f3f4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+}
+
+.instructions {
+  margin: 12px 0;
+}
+
+.instructions ol {
+  margin: 8px 0 0 20px;
+  padding: 0;
+}
+
+.instructions li {
+  margin: 4px 0;
+  font-size: 14px;
+  color: #495057;
+}
+
+.stats {
+  display: flex;
+  gap: 20px;
+  margin-top: 12px;
+  font-size: 14px;
+  color: #6c757d;
+}
+
+.users-list h4 {
+  margin: 0 0 16px 0;
+  color: #2c3e50;
+  font-size: 18px;
+}
+
+.user-table {
+  border: 1px solid #e1e5e9;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+}
+
+.user-table-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2fr;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-bottom: 1px solid #e1e5e9;
+  padding: 12px 16px;
+  font-weight: 600;
+  color: #2c3e50;
+  font-size: 14px;
+}
+
+.user-table-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2fr;
+  padding: 12px 16px;
+  border-bottom: 1px solid #f1f3f4;
+  font-size: 14px;
+  transition: background-color 0.2s ease;
+}
+
+.user-table-row:hover {
+  background: #f8f9fa;
+}
+
+.user-table-row:last-child {
+  border-bottom: none;
+}
+
+.col-username {
+  font-weight: 500;
+  color: #2c3e50;
+}
+
+.col-role {
+  display: flex;
+  align-items: center;
+}
+
+.role-badge {
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.role-admin {
+  background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+  color: #c62828;
+}
+
+.role-doctor {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  color: #1565c0;
+}
+
+.role-student {
+  background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
+  color: #2e7d32;
+}
+
+.col-description {
+  color: #6c757d;
+  font-size: 13px;
 }
 `;
 document.head.appendChild(style);
