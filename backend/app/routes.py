@@ -557,10 +557,15 @@ def get_labels():
             # 尝试从MongoDB获取特定数据集的标签
             labels_data = list(db.labels.find({"dataset_id": processed_ds_id}, {"_id": 0}))
             
-            # 如果没有找到特定数据集的标签，返回所有标签（兼容旧数据）
+            # 如果没有找到特定数据集的标签，只返回没有dataset_id的通用标签
             if not labels_data:
-                current_app.logger.info(f"数据集 {processed_ds_id} 没有专用标签，使用通用标签")
-                labels_data = list(db.labels.find({}, {"_id": 0}))
+                current_app.logger.info(f"数据集 {processed_ds_id} 没有专用标签，使用通用标签（无dataset_id的标签）")
+                labels_data = list(db.labels.find({"dataset_id": {"$exists": False}}, {"_id": 0}))
+                
+                # 如果连通用标签都没有，返回空列表
+                if not labels_data:
+                    current_app.logger.warning(f"数据集 {processed_ds_id} 既没有专用标签也没有通用标签")
+                    return jsonify([])
         else:
             # 如果没有提供dataset_id，返回所有标签
             labels_data = list(db.labels.find({}, {"_id": 0}))
