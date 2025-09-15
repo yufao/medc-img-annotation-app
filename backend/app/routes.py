@@ -226,7 +226,8 @@ def add_dataset_labels(dataset_id):
             label_records.append({
                 "label_id": next_id + i,
                 "label_name": label.get('name'),
-                "category": label.get('category', '病理学')
+                "category": label.get('category', '病理学'),
+                "dataset_id": dataset_id  # 关键修复：为标签指定数据集ID
             })
         
         # 批量插入标签

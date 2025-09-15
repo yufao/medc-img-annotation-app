@@ -41,6 +41,27 @@ export default function App() {
     setShowDatasetManager(false);
   }
 
+  function handleBackOrLogout() {
+    // 如果在标注界面，返回到数据集选择
+    if (dataset && !selectMode) {
+      setDataset(null);
+      setSelectedImageId(null);
+      return;
+    }
+    // 如果在数据集管理界面，返回到数据集选择
+    if (showDatasetManager) {
+      setShowDatasetManager(false);
+      return;
+    }
+    // 如果在图片选择界面，返回到标注界面
+    if (selectMode) {
+      setSelectMode(false);
+      return;
+    }
+    // 如果在数据集选择界面，则真正退出
+    handleLogout();
+  }
+
   function handleImageSelect(id) {
     setSelectedImageId(id);
     setSelectMode(false);
@@ -72,7 +93,11 @@ export default function App() {
         <div className="top-bar">
           <span>用户: <b>{user}</b> ({role})</span>
           <span className="app-title">医学图像标注系统</span>
-          <button className="btn logout" onClick={handleLogout}>退出</button>
+          <button className="btn logout" onClick={handleBackOrLogout}>
+            {dataset && !selectMode ? '返回' : 
+             showDatasetManager ? '返回' : 
+             selectMode ? '返回' : '退出'}
+          </button>
         </div>
         <Annotate 
           user={user} 
@@ -89,16 +114,6 @@ export default function App() {
       </div>
     </div>
   );
-
-  function handleLogin(username, role) {
-    setUser(username);
-    setRole(role);
-  }
-
-  function handleLogout() {
-    setUser(null);
-    setDataset(null);
-  }
 
   function handleImageSelect(id) {
     setSelectedImageId(id);
