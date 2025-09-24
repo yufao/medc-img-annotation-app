@@ -89,6 +89,10 @@ models/
 coverage/
 .nyc_output/
 
+# 大文件备份
+*.tar
+medc-system-*.tar
+
 # 操作系统
 .DS_Store
 .DS_Store?

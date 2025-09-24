@@ -91,22 +91,22 @@ def get_datasets():
 @bp.route('/api/datasets/<int:dataset_id>/statistics', methods=['GET'])
 def get_dataset_statistics(dataset_id):
     """获取指定数据集的统计信息（高效）"""
-    expert_id = request.args.get('expert_id')
+    expert_id = request.args.get('expert_id')  # 用户名
     role = request.args.get('role', 'student')
     
     if not USE_DATABASE:
         return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
 
     try:
-        # 根据角色确定实际的expert_id
-        actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)
+        # 使用用户名作为唯一标识符
+        user_identifier = expert_id
 
         # 使用 count_documents 进行高效计数
         total_count = db.image_datasets.count_documents({"dataset_id": dataset_id})
         
         annotated_count = db.annotations.count_documents({
             "dataset_id": dataset_id,
-            "expert_id": actual_expert_id
+            "expert_id": user_identifier  # 使用用户名
         })
 
         stats = {
@@ -341,14 +341,14 @@ def upload_dataset_images(dataset_id):
 @bp.route('/api/images_with_annotations', methods=['POST'])
 def images_with_annotations():
     """
-    获取图片列表并合并当前角色的标注信息（可分页）。
+    获取图片列表并合并当前用户的标注信息（可分页）。
     输入：{ dataset_id, expert_id(username), role, include_all, page, pageSize }
     输出：[{ image_id, filename, image_path, annotation? }]
     说明：当 include_all=False 时仅返回未标注图片；True 则返回全部。
     """
     data = request.json
     ds_id = data.get('dataset_id')
-    expert_id = data.get('expert_id')
+    expert_id = data.get('expert_id')  # 用户名
     role = data.get('role', 'student')
     include_all = data.get('include_all', False)
     page = data.get('page', 1)
@@ -357,8 +357,8 @@ def images_with_annotations():
     if not USE_DATABASE:
         return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
     
-    # 根据角色确定实际的expert_id
-    actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)  # 默认为student
+    # 使用用户名作为唯一标识符
+    user_identifier = expert_id
     
     try:
         # 确保ds_id正确处理
@@ -385,13 +385,13 @@ def images_with_annotations():
         
         current_app.logger.info(f"数据集 {ds_id} 中有 {len(imgs)} 张图片")
         
-        # 获取该角色在此数据集的所有标注
+        # 获取该用户在此数据集的所有标注
         annotations = list(db.annotations.find({
             'dataset_id': ds_id, 
-            'expert_id': actual_expert_id
+            'expert_id': user_identifier  # 使用用户名
         }, {'_id': 0}))
         
-        current_app.logger.info(f"用户 {role} 在数据集 {ds_id} 中有 {len(annotations)} 条标注")
+        current_app.logger.info(f"用户 {user_identifier} 在数据集 {ds_id} 中有 {len(annotations)} 条标注")
         
         # 获取标签信息用于显示标签名称
         labels = list(db.labels.find({}, {"_id": 0}))
@@ -435,7 +435,7 @@ def get_dataset_images(dataset_id):
     备用图片列表接口，不附带过滤；用于前端回退与联动。
     查询：expert_id, role, page, pageSize
     """
-    expert_id = request.args.get('expert_id')
+    expert_id = request.args.get('expert_id')  # 用户名
     role = request.args.get('role', 'student')
     page = int(request.args.get('page', 1))
     page_size = int(request.args.get('pageSize', 20))
@@ -443,8 +443,8 @@ def get_dataset_images(dataset_id):
     if not USE_DATABASE:
         return jsonify({"msg": "error", "error": "数据库连接不可用"}), 500
     
-    # 根据角色确定实际的expert_id
-    actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)
+    # 使用用户名作为唯一标识符
+    user_identifier = expert_id
     
     try:
         # 从数据集-图片关联表获取该数据集下的图片ID
@@ -467,7 +467,7 @@ def get_dataset_images(dataset_id):
         # 获取标注
         annotations = list(db.annotations.find({
             'dataset_id': dataset_id,
-            'expert_id': actual_expert_id
+            'expert_id': user_identifier  # 使用用户名
         }, {'_id': 0}))
         
         # 获取标签信息
@@ -593,17 +593,17 @@ def get_labels():
 @bp.route('/api/next_image', methods=['POST'])
 def next_image():
     """
-    获取下一个待标注图片（基于角色独立进度）。
+    获取下一个待标注图片（基于用户独立进度）。
     输入：{ dataset_id, expert_id(username), role }
     输出：{ image_id, filename } 或 { msg: 'done' }
     """
     data = request.json
     ds_id = data.get('dataset_id')
-    expert_id = data.get('expert_id')
+    expert_id = data.get('expert_id')  # 这里是用户名
     role = data.get('role', 'student')
     
-    # 根据角色确定实际的expert_id
-    actual_expert_id = ROLE_TO_EXPERT_ID.get(role, 2)
+    # 使用用户名作为唯一标识符，而不是角色
+    user_identifier = expert_id  # 用户名即唯一标识
     
     try:
         # 处理dataset_id，支持字符串和整数
@@ -626,32 +626,36 @@ def next_image():
                 if 'image_id' not in img:
                     img['image_id'] = i + 1  # 生成一个简单的image_id
         
-        # 获取该角色已标注的图片ID
+        # 获取该用户已标注的图片ID
         annotated_imgs = list(db.annotations.find({
             'dataset_id': processed_ds_id, 
-            'expert_id': actual_expert_id
+            'expert_id': user_identifier  # 使用用户名
         }, {'_id': 0, 'image_id': 1}))
         
         # 如果MongoDB中没有标注，使用内存数据
         if not annotated_imgs:
             if isinstance(processed_ds_id, int):
                 annotated_imgs = [{'image_id': a.get('image_id')} for a in ANNOTATIONS 
-                                if a.get('dataset_id') == processed_ds_id and a.get('expert_id') == actual_expert_id]
+                                if a.get('dataset_id') == processed_ds_id and a.get('expert_id') == user_identifier]
             else:
                 annotated_imgs = []
         
         done_img_ids = set([a['image_id'] for a in annotated_imgs])
         
-        current_app.logger.info(f"数据集{processed_ds_id}，角色{role}，总图片{len(imgs)}张，已标注图片ID: {sorted(done_img_ids)}")
+        current_app.logger.info(f"数据集{processed_ds_id}，用户{user_identifier}，总图片{len(imgs)}张，已标注图片ID: {sorted(done_img_ids)}")
         
-        # 返回第一个未标注的图片
-        for img in sorted(imgs, key=lambda x: x['image_id']):
-            if img['image_id'] not in done_img_ids:
-                current_app.logger.info(f"角色 {role} 的下一张图片: static/img/{img['filename']} (image_id: {img['image_id']})")
-                return jsonify(safe_jsonify({"image_id": img['image_id'], "filename": img['filename']}))
+        # 获取未标注的图片
+        untagged_imgs = [img for img in imgs if img['image_id'] not in done_img_ids]
+        
+        if untagged_imgs:
+            # 随机选择一张未标注的图片
+            import random
+            selected_img = random.choice(untagged_imgs)
+            current_app.logger.info(f"用户 {user_identifier} 的随机图片: static/img/{selected_img['filename']} (image_id: {selected_img['image_id']})")
+            return jsonify(safe_jsonify({"image_id": selected_img['image_id'], "filename": selected_img['filename']}))
         
         # 全部标注完成
-        current_app.logger.info(f"角色 {role} 已完成数据集 {processed_ds_id} 的所有标注")
+        current_app.logger.info(f"用户 {user_identifier} 已完成数据集 {processed_ds_id} 的所有标注")
         return jsonify({"msg": "done"})
         
     except Exception as e:
@@ -661,15 +665,15 @@ def next_image():
 @bp.route('/api/annotate', methods=['POST'])
 def annotate():
     """
-    提交或更新标注结果（同一图片+角色 upsert）。
+    提交或更新标注结果（同一图片+用户 upsert）。
     输入：{ dataset_id, image_id, expert_id(username), label, tip? }
     输出：{ msg: 'saved', expert_id }
-    说明：内部会将用户名映射为实际 expert_id（按角色）。
+    说明：使用用户名作为唯一标识符存储标注。
     """
     data = request.json
     ds_id = data.get('dataset_id')
     image_id = data.get('image_id')
-    expert_id = data.get('expert_id')
+    expert_id = data.get('expert_id')  # 用户名
     label = data.get('label')
     tip = data.get('tip', '')
     
@@ -678,27 +682,21 @@ def annotate():
     if isinstance(ds_id, str) and ds_id.isdigit():
         processed_ds_id = int(ds_id)
     
-    # 根据用户名获取角色，再确定实际的expert_id
-    user_role = None
-    for user in USERS:
-        if user['username'] == expert_id:
-            user_role = user['role']
-            break
-    
-    actual_expert_id = ROLE_TO_EXPERT_ID.get(user_role, 2) if user_role else 2
+    # 直接使用用户名作为唯一标识符
+    user_identifier = expert_id
     
     try:
         # 检查是否已经存在该记录
         existing = db.annotations.find_one({
             'dataset_id': processed_ds_id,
             'image_id': image_id,
-            'expert_id': actual_expert_id
+            'expert_id': user_identifier  # 使用用户名
         })
         
         annotation_data = {
             "dataset_id": processed_ds_id,
             "image_id": image_id,
-            "expert_id": actual_expert_id,
+            "expert_id": user_identifier,  # 使用用户名
             "label_id": label,  # 统一使用 label_id
             "datetime": datetime.now().isoformat(),
             "tip": tip
@@ -712,11 +710,11 @@ def annotate():
                 {
                     'dataset_id': processed_ds_id,
                     'image_id': image_id,
-                    'expert_id': actual_expert_id
+                    'expert_id': user_identifier  # 使用用户名
                 },
                 {"$set": annotation_data}
             )
-            current_app.logger.info(f"更新标注: 角色{user_role}, 图片{image_id}, 标签{label}")
+            current_app.logger.info(f"更新标注: 用户{user_identifier}, 图片{image_id}, 标签{label}")
         else:
             # 插入新标注，使用自增序列生成唯一的record_id
             try:
@@ -724,7 +722,7 @@ def annotate():
                 annotation_data["record_id"] = next_record_id
                 
                 db.annotations.insert_one(annotation_data)
-                current_app.logger.info(f"新增标注: 角色{user_role}, 图片{image_id}, 标签{label}, record_id{next_record_id}")
+                current_app.logger.info(f"新增标注: 用户{user_identifier}, 图片{image_id}, 标签{label}, record_id{next_record_id}")
                 
             except Exception as insert_error:
                 current_app.logger.error(f"保存标注失败: {insert_error}")
@@ -735,14 +733,14 @@ def annotate():
         ANNOTATIONS[:] = [a for a in ANNOTATIONS if not (
             a.get('dataset_id') == processed_ds_id and 
             a.get('image_id') == image_id and 
-            a.get('expert_id') == actual_expert_id
+            a.get('expert_id') == user_identifier  # 使用用户名
         )]
         # 添加新的标注记录（统一字段名）
         memory_annotation = annotation_data.copy()
         memory_annotation['label'] = label  # 为了向后兼容，同时保留label字段
         ANNOTATIONS.append(memory_annotation)
         
-        return jsonify({"msg": "saved", "expert_id": actual_expert_id})
+        return jsonify({"msg": "saved", "expert_id": user_identifier})
         
     except Exception as e:
         current_app.logger.error(f"保存标注失败: {e}")
@@ -756,7 +754,7 @@ def annotate():
             ANNOTATIONS[:] = [a for a in ANNOTATIONS if not (
                 a.get('dataset_id') == processed_ds_id and 
                 a.get('image_id') == image_id and 
-                a.get('expert_id') == actual_expert_id
+                a.get('expert_id') == user_identifier  # 使用用户名
             )]
             
             # 添加新记录（保持向后兼容）
@@ -764,7 +762,7 @@ def annotate():
             memory_annotation['label'] = label
             ANNOTATIONS.append(memory_annotation)
             
-            current_app.logger.info(f"备用存储成功: 角色{user_role}, 图片{image_id}, 标签{label}")
+            current_app.logger.info(f"备用存储成功: 用户{user_identifier}, 图片{image_id}, 标签{label}")
             return jsonify({"msg": "saved"})
         except Exception as fallback_error:
             current_app.logger.error(f"备用存储也失败: {fallback_error}")
@@ -783,14 +781,8 @@ def update_annotation():
     if isinstance(ds_id, str) and ds_id.isdigit():
         processed_ds_id = int(ds_id)
     
-    # 根据用户名获取角色
-    user_role = None
-    for user in USERS:
-        if user['username'] == expert_id:
-            user_role = user['role']
-            break
-    
-    actual_expert_id = ROLE_TO_EXPERT_ID.get(user_role, 2) if user_role else 2
+    # 使用用户名作为唯一标识符
+    user_identifier = expert_id
     
     update_fields = {
         'label': data.get('label'),
@@ -803,20 +795,20 @@ def update_annotation():
         result = db.annotations.update_one({
             "dataset_id": processed_ds_id, 
             "image_id": image_id, 
-            "expert_id": actual_expert_id
+            "expert_id": user_identifier  # 使用用户名
         }, {"$set": update_fields})
         
         # 同时更新内存数据
         for ann in ANNOTATIONS:
             if (ann['dataset_id'] == processed_ds_id and 
                 ann['image_id'] == image_id and 
-                ann['expert_id'] == actual_expert_id):
+                ann['expert_id'] == user_identifier):  # 使用用户名
                 ann.update(update_fields)
                 break
         
         if result.modified_count or any(a['dataset_id'] == processed_ds_id and a['image_id'] == image_id 
-                                       and a['expert_id'] == actual_expert_id for a in ANNOTATIONS):
-            current_app.logger.info(f"更新标注成功: 角色{user_role}, 图片{image_id}")
+                                       and a['expert_id'] == user_identifier for a in ANNOTATIONS):  # 使用用户名
+            current_app.logger.info(f"更新标注成功: 用户{user_identifier}, 图片{image_id}")
             return jsonify({"msg": "updated"})
         else:
             return jsonify({"msg": "not found or not changed"})
@@ -836,15 +828,8 @@ def export():
         dataset_id = request.args.get('dataset_id')
         expert_id = request.args.get('expert_id')
         
-        # 查询用户角色
-        user_role = None
-        if expert_id:
-            for user in USERS:
-                if user['username'] == expert_id:
-                    user_role = user['role']
-                    break
-                    
-        actual_expert_id = ROLE_TO_EXPERT_ID.get(user_role, 2) if user_role else None
+        # 使用用户名作为唯一标识符
+        user_identifier = expert_id if expert_id else None
         
         # 处理dataset_id
         if dataset_id and dataset_id.isdigit():
@@ -860,8 +845,8 @@ def export():
             query = {}
             if processed_ds_id is not None:
                 query['dataset_id'] = processed_ds_id
-            if actual_expert_id is not None:
-                query['expert_id'] = actual_expert_id
+            if user_identifier is not None:
+                query['expert_id'] = user_identifier  # 使用用户名
                 
             # 1. 导出标注数据
             try:

@@ -11,10 +11,10 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 import os
 
-# 加载环境变量
+# 加载环境变量（统一命名优先级）
 load_dotenv()
-MONGO_URI = os.getenv('MONGODB_URI', 'mongodb://172.20.48.1:27017/local')
-MONGO_DB = os.getenv('MONGODB_DB', 'local')
+MONGO_URI = os.getenv('MONGO_URI') or os.getenv('MONGODB_URI') or 'mongodb://localhost:27017/'
+MONGO_DB = os.getenv('MONGO_DB') or os.getenv('MONGODB_DB') or 'medical_annotation'
 
 def setup_database():
     """初始化重构后的数据库结构和测试数据"""

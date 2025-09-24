@@ -1,24 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
-
-const api = axios.create({ baseURL: '/api' });
-
-// 防抖Hook
-function useDebounce(value, delay) {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
-}
+import React, { useState, useEffect } from 'react';
+import Login from './components/Login';
+import DatasetSelect from './components/DatasetSelect';
+import DatasetManager from './components/admin/DatasetManager';
+import ImageSelector from './components/annotation/ImageSelector';
+import Annotate from './components/annotation/Annotate';
+import ExportButton from './components/annotation/ExportButton';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -26,134 +12,42 @@ export default function App() {
   const [dataset, setDataset] = useState(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedImageId, setSelectedImageId] = useState(null);
-  const [adminMode, setAdminMode] = useState(false);
   const [showDatasetManager, setShowDatasetManager] = useState(false);
 
-  function handleLogin(username, role) {
-    setUser(username);
-    setRole(role);
-  }
-
-  function handleLogout() {
-    setUser(null);
-    setDataset(null);
-    setAdminMode(false);
-    setShowDatasetManager(false);
-  }
-
-  function handleBackOrLogout() {
-    // 如果在标注界面，返回到数据集选择
-    if (dataset && !selectMode) {
-      setDataset(null);
-      setSelectedImageId(null);
-      return;
-    }
-    // 如果在数据集管理界面，返回到数据集选择
-    if (showDatasetManager) {
-      setShowDatasetManager(false);
-      return;
-    }
-    // 如果在图片选择界面，返回到标注界面
-    if (selectMode) {
-      setSelectMode(false);
-      return;
-    }
-    // 如果在数据集选择界面，则真正退出
+  const handleLogin = (u, r) => { setUser(u); setRole(r); };
+  const handleLogout = () => { setUser(null); setDataset(null); setShowDatasetManager(false); };
+  const handleBackOrLogout = () => {
+    if (dataset && !selectMode) { setDataset(null); setSelectedImageId(null); return; }
+    if (showDatasetManager) { setShowDatasetManager(false); return; }
+    if (selectMode) { setSelectMode(false); return; }
     handleLogout();
-  }
+  };
+  const handleImageSelect = (id) => { setSelectedImageId(id); setSelectMode(false); };
+  const handleAnnotationDone = () => { setDataset(null); setSelectedImageId(null); };
 
-  function handleImageSelect(id) {
-    setSelectedImageId(id);
-    setSelectMode(false);
-  }
-
-  function handleAnnotationDone() {
-    setDataset(null);
-    setSelectedImageId(null);
-  }
-
-  if (!user) return <div className="login-bg"><Login onLogin={(u, r) => handleLogin(u, r)} /></div>;
+  if (!user) return <div className="login-bg"><Login onLogin={handleLogin} /></div>;
   if (showDatasetManager) return <div className="select-bg"><DatasetManager user={user} role={role} onBack={() => setShowDatasetManager(false)} /></div>;
   if (!dataset) return <div className="select-bg"><DatasetSelect user={user} role={role} onSelect={setDataset} onAdmin={() => role === 'admin' && setShowDatasetManager(true)} /></div>;
   if (selectMode) return <div className="select-bg"><ImageSelector user={user} dataset={dataset} role={role} onSelect={handleImageSelect} onBack={() => setSelectMode(false)} /></div>;
 
   return (
     <div className="app-container">
-      {/* 页面背景LOGO */}
       <div className="page-logos">
-        <div className="logo-left">
-          <img src="/实验室LOGO.png" alt="实验室LOGO" className="page-logo" />
-        </div>
-        <div className="logo-right">
-          <img src="/JNU-LOGO.jpg" alt="学校LOGO" className="page-logo" />
-        </div>
-        
+        <div className="logo-left"><img src="/实验室LOGO.png" alt="实验室LOGO" className="page-logo" /></div>
+        <div className="logo-right"><img src="/JNU-LOGO.jpg" alt="学校LOGO" className="page-logo" /></div>
       </div>
       <div className="main-bg">
         <div className="top-bar">
           <span>用户: <b>{user}</b> ({role})</span>
-          <span className="app-title">医学图像标注系统</span>
-          <button className="btn logout" onClick={handleBackOrLogout}>
-            {dataset && !selectMode ? '返回' : 
-             showDatasetManager ? '返回' : 
-             selectMode ? '返回' : '退出'}
-          </button>
+            <span className="app-title">医学图像标注系统</span>
+          <button className="btn logout" onClick={handleBackOrLogout}>{dataset && !selectMode ? '返回' : showDatasetManager ? '返回' : selectMode ? '返回' : '退出'}</button>
         </div>
-        <Annotate 
-          user={user} 
-          dataset={dataset} 
-          role={role}
-          onDone={handleAnnotationDone} 
-          imageIdInit={selectedImageId}
-          onSelectMode={() => setSelectMode(true)}
-        />
+        <Annotate user={user} dataset={dataset} role={role} onDone={handleAnnotationDone} imageIdInit={selectedImageId} onSelectMode={() => setSelectMode(true)} />
         <div className="export-bar">
-          <Export dataset={dataset} user={user} role={role} />
+          <ExportButton dataset={dataset} user={user} role={role} />
           <button className="btn" onClick={() => setSelectMode(true)}>选择图片/修改标注</button>
         </div>
       </div>
-    </div>
-  );
-
-  function handleImageSelect(id) {
-    setSelectedImageId(id);
-    setSelectMode(false);
-  }
-
-  function handleAnnotationDone() {
-    setDataset(null);
-    setSelectedImageId(null);
-  }
-}
-
-function Login({ onLogin }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [msg, setMsg] = useState('');
-
-  const handleLogin = async () => {
-    try {
-      const res = await api.post('/login', { username, password });
-      onLogin(username, res.data.role);
-    } catch (error) {
-      setMsg('登录失败');
-    }
-  };
-
-  return (
-    <div className="login-card">
-      <h2>用户登录</h2>
-      <div className="form-row">
-        <input className="input" placeholder="用户名" value={username} onChange={e=>setUsername(e.target.value)} />
-      </div>
-      <div className="form-row">
-        <input className="input" type="password" placeholder="密码" value={password} onChange={e=>setPassword(e.target.value)} />
-      </div>
-      <button className="btn login-btn" onClick={handleLogin} style={{width:'100%',margin:'18px 0 8px 0'}}>
-        登录
-      </button>
-      <div className="login-msg">{msg}</div>
-      <div className="login-tip">请使用系统分配的账号登录</div>
     </div>
   );
 }

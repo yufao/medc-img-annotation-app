@@ -1,0 +1,6 @@
+/* Annotation page specific styles (extracted from app.css progressively) */
+.progress-panel { background:#fff; padding:12px 16px; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.08); margin-bottom:12px; }
+.progress-row { display:flex; gap:16px; align-items:center; font-size:13px; }
+.metric .value { font-weight:600; margin-right:4px; }
+.progress-bar { height:6px; background:#eef1f6; border-radius:3px; overflow:hidden; margin-top:6px; }
+.progress-bar-inner { background:linear-gradient(90deg,#1677ff,#4f8cff); height:100%; transition:width .4s ease; }

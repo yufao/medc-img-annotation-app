@@ -30,6 +30,20 @@ python run.py
 - `/api/export` - 数据导出
 
 更多详情请参考主项目 README.md
+
+## 新增调试与健康端点
+
+- 数据库调试：`GET /api/debug/db`
+- 管理端数据库状态：`GET /api/admin/db_status?role=admin`
+- 健康检查：`GET /api/healthz`
+
+## 生产部署速览
+
+```bash
+gunicorn -c deploy/gunicorn.conf.py 'app:create_app()'
+```
+
+或使用 systemd 见 `docs/DEPLOYMENT.md`。
 ```
 
 ## � 关键端点

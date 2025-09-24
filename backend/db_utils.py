@@ -18,10 +18,10 @@ import threading
 from datetime import datetime
 from dotenv import load_dotenv
 
-# 加载环境变量
+# 加载环境变量 (统一到新的优先级方案)
 load_dotenv()
-MONGO_URI = os.getenv('MONGODB_URI', 'mongodb://172.20.48.1:27017/local')
-MONGO_DB = os.getenv('MONGODB_DB', 'local')
+MONGO_URI = os.getenv('MONGO_URI') or os.getenv('MONGODB_URI') or 'mongodb://localhost:27017/'
+MONGO_DB = os.getenv('MONGO_DB') or os.getenv('MONGODB_DB') or 'medical_annotation'
 
 class SequenceGenerator:
     """MongoDB自增序列生成器"""
