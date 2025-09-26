@@ -15,7 +15,7 @@ core/           # 基础设施（数据库连接等）
 services/       # 领域服务（dataset / label / image / annotation / export / user）
 static/         # 静态文件（图片等）
 user_config.py  # 用户/角色配置（后续可迁移数据库或 JWT）
-routes.py       # legacy (已弃用; 将在清理阶段移除)
+routes.py       # legacy (计划在后续阶段下线，当前仍受 create_app 兼容注册保护)
 ```
 
 ## 2. 分层职责
@@ -82,4 +82,4 @@ routes.py       # legacy (已弃用; 将在清理阶段移除)
 3. Phase5（规划）：前端多选 UI + 状态管理优化（Zustand/Jotai）+ 缓存层（可选 Redis）
 
 ---
-更新时间：初始创建
+更新时间：2025-09-26（补充 routes 兼容说明）

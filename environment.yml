@@ -1,0 +1,20 @@
+name: medc-annotation
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # Python runtime
+  - python=3.10
+  - pip
+
+  # Backend runtime dependencies (actually used by the project)
+  - flask
+  - flask-cors
+  - pymongo
+  - python-dotenv
+  - pandas
+  - openpyxl
+  - pillow
+  - gunicorn
+
+  # Note: frontend uses Node.js via package.json (managed separately)
