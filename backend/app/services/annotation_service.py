@@ -53,6 +53,22 @@ class AnnotationService:
         page: int,
         page_size: int
     ) -> List[Dict[str, Any]]:
+        """列出数据集图片并合并（可选）某专家的标注信息。
+
+        参数：
+        - dataset_id: 数据集 ID
+        - expert_id: 专家标识（用户名/账号），用于合并该用户的标注并生成稳定随机顺序
+        - include_all: 是否包含已标注图片；False 时仅返回未标注子集
+        - page, page_size: 分页参数
+
+        返回：
+        - 列表，每项包含 {image_id, filename, image_path, annotation?}
+          其中 annotation 内兼容字段：label_id 与 label（历史字段）
+
+        说明：
+        - 未标注子集会根据“(dataset_id, expert_id)”生成稳定随机顺序；
+        - 当 include_all=True 时，返回“未标注(随机) + 已标注(后)”。
+        """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
         links = list(self.db.image_datasets.find({"dataset_id": ds_id}, {"_id": 0, "image_id": 1}))
@@ -61,13 +77,19 @@ class AnnotationService:
         image_ids = [l['image_id'] for l in links]
         imgs = list(self.db.images.find({"image_id": {"$in": image_ids}}, {"_id": 0}))
         annotations = list(self.db.annotations.find({'dataset_id': ds_id, 'expert_id': expert_id}, {'_id': 0}))
-        labels = list(self.db.labels.find({}, {"_id": 0, "label_id": 1, "label_name": 1}))
+        # 标签按数据集过滤，若该数据集没有专属标签，则回退到全局标签（dataset_id 缺失或为 None）
+        labels = list(self.db.labels.find({"dataset_id": ds_id}, {"_id": 0, "label_id": 1, "label_name": 1}))
+        if not labels:
+            labels = list(self.db.labels.find({"dataset_id": {"$exists": False}}, {"_id": 0, "label_id": 1, "label_name": 1})) or \
+                     list(self.db.labels.find({"dataset_id": None}, {"_id": 0, "label_id": 1, "label_name": 1}))
         labels_dict = {l['label_id']: l.get('label_name', '') for l in labels}
         result: List[Dict[str, Any]] = []
         for img in imgs:
             ann = next((a for a in annotations if a.get('image_id') == img.get('image_id')), None)
             if ann and ann.get('label_id'):
                 ann['label_name'] = labels_dict.get(ann['label_id'], '')
+                # 兼容前端沿用的字段名 'label'
+                ann['label'] = ann.get('label_id')
             entry = {
                 "image_id": img.get('image_id'),
                 "filename": self._filename_from_path(img.get('image_path', '')),
@@ -76,12 +98,36 @@ class AnnotationService:
             }
             if include_all or not ann:
                 result.append(entry)
+        # 使用“用户+数据集”的稳定随机顺序重排未标注项
+        if expert_id:
+            try:
+                import hashlib
+                seed_src = f"{ds_id}:{expert_id}"
+                seed_int = int(hashlib.md5(seed_src.encode('utf-8')).hexdigest(), 16) % (2**31)
+                rng = random.Random(seed_int)
+                untagged = [r for r in result if not r.get('annotation')]
+                tagged = [r for r in result if r.get('annotation')]
+                if untagged:
+                    # 关键修正：先对“全部图片ID”进行一次稳定随机，再按该全局顺序对子集排序
+                    all_ids = [img.get('image_id') for img in imgs]
+                    rng.shuffle(all_ids)
+                    order_index = {img_id: i for i, img_id in enumerate(all_ids)}
+                    untagged.sort(key=lambda r: order_index.get(r['image_id'], 0))
+                    # include_all=False 时只返回未标注；True 时先未标注后已标注
+                    result = untagged if not include_all else (untagged + tagged)
+            except Exception:
+                # 失败则保持原顺序
+                pass
         start = (page - 1) * page_size
         end = start + page_size
         return result[start:end]
 
     # ------------- Previous image -------------
     def prev_image(self, dataset_id: int, current_image_id: int) -> Dict[str, Any]:
+        """获取上一张图片（按 image_id 升序的前一个）。
+
+        返回：{image_id, filename}?；若不存在返回 {msg: 'no previous image'}。
+        """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
         # Prefer linking table ordering by image_id
@@ -108,6 +154,11 @@ class AnnotationService:
 
     # ------------- Next image (random unannotated) -------------
     def next_image(self, dataset_id: int, expert_id: str) -> Dict[str, Any]:
+        """获取下一张未标注图片（稳定随机顺序）。
+
+        策略：以 (dataset_id, expert_id) 作为种子，对数据集图片 ID 进行伪随机打乱，
+        返回顺序中第一个尚未被该用户标注的图片；若全部标注完成返回 {msg: 'done'}。
+        """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
         links = list(self.db.image_datasets.find({"dataset_id": ds_id}, {"_id": 0, "image_id": 1}))
@@ -130,7 +181,22 @@ class AnnotationService:
         done_ids = {a.get('image_id') for a in annotated_imgs}
         untagged = [img for img in imgs if img.get('image_id') not in done_ids]
         if untagged:
-            selected = random.choice(untagged)
+            # 使用“用户+数据集”的稳定随机顺序，返回第一个未标注项
+            try:
+                import hashlib
+                seed_src = f"{ds_id}:{expert_id}"
+                seed_int = int(hashlib.md5(seed_src.encode('utf-8')).hexdigest(), 16) % (2**31)
+                rng = random.Random(seed_int)
+                id_list = [img.get('image_id') for img in imgs]
+                rng.shuffle(id_list)
+                # 找到顺序中第一个尚未标注的 image_id
+                pick_id = next((iid for iid in id_list if iid not in done_ids), None)
+                if pick_id is not None:
+                    selected = next((img for img in imgs if img.get('image_id') == pick_id), untagged[0])
+                else:
+                    selected = untagged[0]
+            except Exception:
+                selected = random.choice(untagged)
             return {
                 "image_id": selected.get('image_id'),
                 "filename": selected.get('filename') or self._filename_from_path(selected.get('image_path', ''))
@@ -146,6 +212,15 @@ class AnnotationService:
         label_id: int,
         tip: str = ''
     ) -> Dict[str, Any]:
+        """保存/更新单条标注（单选模式）。
+
+        行为：
+        - upsert：同 (dataset_id, image_id, expert_id) 若已存在则更新，否则插入新纪录；
+        - 维护 record_id 自增序列；
+        - 写入 label_id 并兼容内存副本中的历史字段 label；
+        - 触发数据集统计缓存失效。
+        返回：{"msg": "saved", "expert_id": expert_id}
+        """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
         existing = self.db.annotations.find_one({'dataset_id': ds_id, 'image_id': image_id, 'expert_id': expert_id})
@@ -183,10 +258,14 @@ class AnnotationService:
         label_id: Optional[int],
         tip: str = ''
     ) -> Dict[str, Any]:
+        """更新已存在标注的字段（label_id/tip/datetime）。
+
+        返回：{"msg": "updated"} 或 {"msg": "not found or not changed"}
+        """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
         update_fields = {
-            'label': label_id,
+            'label_id': label_id,
             'tip': tip,
             'datetime': datetime.now().isoformat()
         }

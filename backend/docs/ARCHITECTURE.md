@@ -15,7 +15,7 @@ core/           # 基础设施（数据库连接等）
 services/       # 领域服务（dataset / label / image / annotation / export / user）
 static/         # 静态文件（图片等）
 user_config.py  # 用户/角色配置（后续可迁移数据库或 JWT）
-routes.py       # legacy (计划在后续阶段下线，当前仍受 create_app 兼容注册保护)
+routes.py       # legacy（仍保留；默认会注册，建议在生产通过环境变量禁用，详见 __init__.py）
 ```
 
 ## 2. 分层职责
@@ -73,8 +73,7 @@ routes.py       # legacy (计划在后续阶段下线，当前仍受 create_app 
 关键点：环境变量 (.env)、日志轮转、数据备份（mongodump + cron）。
 
 ## 9. 逐步清理 Legacy
-- routes.py 打标签 deprecated（已不再注册或设环境变量控制）
-- 保留两周观察窗口后删除或移动到 docs/legacy/
+- routes.py 仍保留以兼容历史接口；建议设置 DISABLE_LEGACY_ROUTES=1 在生产禁用旧路由，由新蓝图完全接管。
 
 ## 10. 后续演进路线图
 1. Phase3 完成：multi_select 字段、文档骨架、基础测试

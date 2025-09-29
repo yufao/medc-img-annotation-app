@@ -21,6 +21,9 @@ body {
 .btn { background:linear-gradient(90deg,#4f8cff 0%, #1677ff 100%); color:#fff; border:none; border-radius:12px; padding:13px 38px; font-size:18px; cursor:pointer; margin-left:10px; margin-top:8px; transition:background 0.2s, box-shadow 0.2s, transform 0.1s; box-shadow:0 2px 12px #1677ff22; font-weight:500; }
 .btn:hover:not(:disabled) { background:linear-gradient(90deg,#1677ff 0%, #4f8cff 100%); transform:translateY(-2px) scale(1.04); box-shadow:0 4px 18px #1677ff33; }
 .btn:disabled { background:#bfc7d1; cursor:not-allowed; box-shadow:none; }
+/* 提交状态颜色区分 */
+.btn.pending { background:#faad14; color:#fff; }
+.btn.disabled, .btn:disabled { background:#d9d9d9; color:#8c8c8c; cursor:not-allowed; }
 .btn.logout { background:linear-gradient(90deg,#ff4d4f 0%, #f5222d 100%); }
 .btn.logout:hover:not(:disabled) { background:linear-gradient(90deg,#f5222d 0%, #ff4d4f 100%); }
 .form-row { margin:28px 0; display:flex; align-items:center; }

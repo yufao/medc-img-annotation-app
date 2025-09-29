@@ -53,6 +53,9 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   const [submitDisabled, setSubmitDisabled] = useState(false);
   const [countsCache, setCountsCache] = useState(null);
   const [lastCountsUpdate, setLastCountsUpdate] = useState(0);
+  // 预取下一张（稳定随机顺序）：候选元数据 + 已预加载的图片 URL
+  const [nextCandidate, setNextCandidate] = useState(null);
+  const [nextImgSrc, setNextImgSrc] = useState(null);
 
   // 加载标签 & 统计
   useEffect(() => {
@@ -68,6 +71,36 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   useEffect(() => { if (imageIdInit) { setImageId(imageIdInit); fetchImage(imageIdInit); } }, [imageIdInit]);
   useEffect(() => { if (dataset && user && !imageIdInit) fetchImage(imageId || null); // eslint-disable-next-line
   }, [dataset, user]);
+
+  // 预取下一张（按稳定随机顺序：include_all=false 的顺序）
+  const prefetchNextStableRandom = useCallback(async (currentImageId) => {
+    if (!dataset || !user) return;
+    try {
+      const resp = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: false });
+      const list = (resp.data || []).filter(x => !x.annotation);
+      if (!list.length) { setNextCandidate(null); setNextImgSrc(null); return; }
+      // 在未标注序列中找到当前的索引；通常 current 在未标注列表的第 0 位
+      const idx = list.findIndex(x => String(x.image_id) === String(currentImageId));
+      const nextItem = idx >= 0 ? list[idx + 1] : list[0];
+      if (nextItem) {
+        setNextCandidate({ image_id: nextItem.image_id, filename: nextItem.filename, image_path: nextItem.image_path });
+        // 通过 JS 预加载下一张图片
+        const url = `/static/img/${nextItem.filename}`;
+        const imgEl = new Image();
+        imgEl.loading = 'eager';
+        imgEl.decoding = 'async';
+        imgEl.src = url;
+        // 预加载完成/失败都记录 URL（失败时浏览器也会缓存 404/错误状态，后续渲染仍会触发请求）
+        imgEl.onload = () => setNextImgSrc(url);
+        imgEl.onerror = () => setNextImgSrc(url);
+      } else {
+        setNextCandidate(null); setNextImgSrc(null);
+      }
+    } catch (e) {
+      // 忽略预取失败，不影响主流程
+      setNextCandidate(null); setNextImgSrc(null);
+    }
+  }, [dataset, user, role]);
 
   const fetchCounts = async (forceRefresh = false) => {
     if (!dataset || !user) return;
@@ -89,19 +122,42 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       if (id) {
         const { data } = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: true });
         const found = data.find(img => String(img.image_id) === String(id));
-        if (found) { setImg(found); if (found.annotation) { setLabel(String(found.annotation.label)); setRemark(found.annotation.tip || ''); } else { setLabel(''); setRemark(''); } setImageId(found.image_id); resetView(); setIsImageSelected(false); return; }
+        if (found) {
+          setImg(found);
+          if (found.annotation) { setLabel(String(found.annotation.label)); setRemark(found.annotation.tip || ''); } else { setLabel(''); setRemark(''); }
+          setImageId(found.image_id); resetView(); setIsImageSelected(false);
+          // 基于当前图片预取下一张
+          prefetchNextStableRandom(found.image_id);
+          return;
+        }
       }
-      const allImagesResponse = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: true });
-      const allImages = allImagesResponse.data;
-      const unAnnotatedImage = allImages.find(img => !img.annotation);
-      if (unAnnotatedImage) { setImg(unAnnotatedImage); setLabel(''); setRemark(''); setImageId(unAnnotatedImage.image_id); resetView(); setIsImageSelected(false); }
+      // 优先仅请求未标注图片列表，以遵循后端“稳定随机顺序”
+      const unAnnotatedResp = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: false });
+      const unAnnotatedList = (unAnnotatedResp.data || []).filter(x => !x.annotation);
+      if (unAnnotatedList.length > 0) {
+        const first = unAnnotatedList[0];
+        setImg(first); setLabel(''); setRemark(''); setImageId(first.image_id); resetView(); setIsImageSelected(false);
+        // 直接用列表中的第二项作为“下一张”进行预取（稳定随机顺序）
+        const second = unAnnotatedList[1];
+        if (second) {
+          setNextCandidate({ image_id: second.image_id, filename: second.filename, image_path: second.image_path });
+          const url = `/static/img/${second.filename}`;
+          const imgEl = new Image(); imgEl.loading = 'eager'; imgEl.decoding = 'async'; imgEl.src = url;
+          imgEl.onload = () => setNextImgSrc(url);
+          imgEl.onerror = () => setNextImgSrc(url);
+        } else { setNextCandidate(null); setNextImgSrc(null); }
+      }
       else {
         try {
           const statsResponse = await api.get(`/datasets/${dataset.id}/statistics`, { params: { expert_id: user, role, dataset_id: dataset.id } });
           const stats = statsResponse.data; if ((stats.annotated_count || 0) >= (stats.total_count || 0) && stats.total_count > 0) { setImg({ completed: true }); setImageId(null); }
           else {
             const nextImageResponse = await api.post('/next_image', { expert_id: user, dataset_id: dataset.id, role });
-            if (nextImageResponse.data.image_id) { setImg({ image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename }); setLabel(''); setRemark(''); setImageId(nextImageResponse.data.image_id); resetView(); setIsImageSelected(false); } else { setImg({ completed: true }); setImageId(null); }
+            if (nextImageResponse.data.image_id) {
+              const meta = { image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename };
+              setImg(meta); setLabel(''); setRemark(''); setImageId(meta.image_id); resetView(); setIsImageSelected(false);
+              prefetchNextStableRandom(meta.image_id);
+            } else { setImg({ completed: true }); setImageId(null); }
           }
         } catch { setImg({ completed: true }); setImageId(null); }
       }
@@ -116,23 +172,39 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
     try {
       await api.post('/annotate', { expert_id: user, dataset_id: dataset.id, image_id: img.image_id, label, tip: remark });
       setLabel(''); setRemark('');
+      // 优先使用“已预取的下一张”（稳定随机序的下一项）
+      let usedOptimistic = false;
+      if (nextCandidate) {
+        setImg({ image_id: nextCandidate.image_id, filename: nextCandidate.filename });
+        setImageId(nextCandidate.image_id); resetView(); setIsImageSelected(false);
+        usedOptimistic = true;
+      }
+      // 后台校验：请求 authoritative 的 next_image，若与预取不一致则切换为权威结果
       try {
-        const allImagesResponse = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: true });
-        const allImages = allImagesResponse.data; const unAnnotatedImage = allImages.find(img => !img.annotation);
-        if (unAnnotatedImage) { setImg(unAnnotatedImage); setImageId(unAnnotatedImage.image_id); resetView(); setIsImageSelected(false); }
-        else {
-          const statsResponse = await api.get(`/datasets/${dataset.id}/statistics`, { params: { expert_id: user, role, dataset_id: dataset.id } });
-            const stats = statsResponse.data; if ((stats.annotated_count || 0) >= (stats.total_count || 0) && stats.total_count > 0) { setImg({ completed: true }); setImageId(null); }
-            else {
-              const nextImageResponse = await api.post('/next_image', { expert_id: user, dataset_id: dataset.id, role });
-              if (nextImageResponse.data.image_id) { setImg({ image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename }); setImageId(nextImageResponse.data.image_id); resetView(); setIsImageSelected(false); }
-              else { setImg({ completed: true }); setImageId(null); }
-            }
+        const nextImageResponse = await api.post('/next_image', { expert_id: user, dataset_id: dataset.id, role });
+        if (nextImageResponse.data.image_id) {
+          const authoritative = { image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename };
+          if (!usedOptimistic || String(authoritative.image_id) !== String(nextCandidate?.image_id)) {
+            setImg(authoritative); setImageId(authoritative.image_id); resetView(); setIsImageSelected(false);
+          }
+          // 基于新 current 继续预取后续项
+          prefetchNextStableRandom(authoritative.image_id);
+        } else {
+          // 没有下一张
+          if (!usedOptimistic) { setImg({ completed: true }); setImageId(null); }
+          setNextCandidate(null); setNextImgSrc(null);
         }
-      } catch { fetchImage(); }
+      } catch {
+        // 如果 next_image 失败，但已使用本地预取，则继续基于本地 current 进行预取；否则回退到拉取未标注列表
+        if (usedOptimistic) {
+          prefetchNextStableRandom(nextCandidate.image_id);
+        } else {
+          fetchImage();
+        }
+      }
       fetchCounts(true);
     } catch { setError('提交失败，请重试'); }
-    finally { setTimeout(() => setSubmitDisabled(false), 1000); }
+    finally { setSubmitDisabled(false); }
   };
 
   const handlePrev = async () => {
@@ -182,7 +254,14 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
         <label>备注：</label>
         <input className="input" value={remark} onChange={e => setRemark(e.target.value)} placeholder="可选" />
       </div>
-      <button className="btn" onClick={handleSubmit} disabled={!label || submitDisabled} style={{ opacity: submitDisabled ? 0.6 : 1 }}>{submitDisabled ? '提交中...' : '提交并下一张'}</button>
+      <button
+        className={"btn" + (submitDisabled ? " pending" : "")}
+        onClick={handleSubmit}
+        disabled={!label && !submitDisabled}
+        style={{ pointerEvents: submitDisabled ? 'none' : 'auto' }}
+      >
+        {submitDisabled ? '提交中...' : '提交并下一张'}
+      </button>
       <button className="btn" onClick={handlePrev} style={{ marginLeft: 12 }}>上一张</button>
     </div>
   );

@@ -3,7 +3,7 @@ import Login from './components/Login';
 import DatasetSelect from './components/DatasetSelect';
 import DatasetManager from './components/admin/DatasetManager';
 import ImageSelector from './components/annotation/ImageSelector';
-import Annotate from './components/annotation/Annotate';
+import AnnotatePage from './components/annotation/Annotate';
 import ExportButton from './components/annotation/ExportButton';
 
 export default function App() {
@@ -42,7 +42,7 @@ export default function App() {
             <span className="app-title">医学图像标注系统</span>
           <button className="btn logout" onClick={handleBackOrLogout}>{dataset && !selectMode ? '返回' : showDatasetManager ? '返回' : selectMode ? '返回' : '退出'}</button>
         </div>
-        <Annotate user={user} dataset={dataset} role={role} onDone={handleAnnotationDone} imageIdInit={selectedImageId} onSelectMode={() => setSelectMode(true)} />
+  <AnnotatePage user={user} dataset={dataset} role={role} onDone={handleAnnotationDone} imageIdInit={selectedImageId} onSelectMode={() => setSelectMode(true)} />
         <div className="export-bar">
           <ExportButton dataset={dataset} user={user} role={role} />
           <button className="btn" onClick={() => setSelectMode(true)}>选择图片/修改标注</button>

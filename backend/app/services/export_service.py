@@ -22,12 +22,16 @@ class ExportService:
         output = BytesIO()
         processed_ds_id = dataset_id
         user_identifier = expert_id if expert_id else None
+        # 管理员导出（expert_id=admin）需要聚合所有用户
+        if user_identifier and isinstance(user_identifier, str) and user_identifier.lower() == 'admin':
+            user_identifier = None
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             # annotations sheet
             try:
                 query = {}
                 if processed_ds_id is not None:
                     query['dataset_id'] = processed_ds_id
+                # 管理员或未传入 expert_id 时，导出该数据集的所有用户标注
                 if user_identifier is not None:
                     query['expert_id'] = user_identifier
                 annotations_data = list(self.db.annotations.find(query, {"_id": 0}))
@@ -36,7 +40,13 @@ class ExportService:
                         if 'label' in item and 'label_id' not in item:
                             item['label_id'] = item['label']
                         item.pop('label', None)
-                    labels_dict = {l.get('label_id'): l.get('label_name', '') for l in self.db.labels.find({}, {"_id": 0})}
+                    # 标签按数据集过滤（无则回退全局）
+                    label_query = {"dataset_id": processed_ds_id} if processed_ds_id is not None else {}
+                    labels_list = list(self.db.labels.find(label_query, {"_id": 0}))
+                    if processed_ds_id is not None and not labels_list:
+                        labels_list = list(self.db.labels.find({"dataset_id": {"$exists": False}}, {"_id": 0})) or \
+                                      list(self.db.labels.find({"dataset_id": None}, {"_id": 0}))
+                    labels_dict = {l.get('label_id'): l.get('label_name', '') for l in labels_list}
                     for item in annotations_data:
                         item['label_name'] = labels_dict.get(item.get('label_id'), '')
                     adf = pd.DataFrame(annotations_data)
@@ -68,7 +78,14 @@ class ExportService:
                 pd.DataFrame([{'error': str(e)}]).to_excel(writer, sheet_name='图片数据错误', index=False)
             # labels sheet
             try:
-                labels_data = list(self.db.labels.find({}, {"_id": 0}))
+                # 标签工作表也按数据集过滤，保持导出内容相干
+                if processed_ds_id is not None:
+                    labels_data = list(self.db.labels.find({"dataset_id": processed_ds_id}, {"_id": 0}))
+                    if not labels_data:
+                        labels_data = list(self.db.labels.find({"dataset_id": {"$exists": False}}, {"_id": 0})) or \
+                                      list(self.db.labels.find({"dataset_id": None}, {"_id": 0}))
+                else:
+                    labels_data = list(self.db.labels.find({}, {"_id": 0}))
                 ldf = pd.DataFrame(labels_data) if labels_data else pd.DataFrame(columns=['label_id','label_name','category'])
                 if not ldf.empty and 'label_id' in ldf.columns:
                     ldf = ldf.sort_values('label_id')

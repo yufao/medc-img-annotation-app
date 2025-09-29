@@ -18,16 +18,21 @@ class LabelService:
     def add_dataset_labels(self, dataset_id: int, labels: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         self.ensure_db()
         base = self._next_label_id_base()
-        records = []
+        # 注意：pymongo 会在原地给插入的 dict 添加 _id，导致 jsonify 报 ObjectId 不可序列化
+        # 这里将用于返回的 records 与实际插入的 docs 分离，避免原地突变
+        records: List[Dict[str, Any]] = []  # 用于返回（无 _id）
+        docs: List[Dict[str, Any]] = []     # 实际插入（可能被 pymongo 添加 _id）
         for i, label in enumerate(labels):
-            records.append({
+            doc = {
                 "label_id": base + i,
                 "label_name": label.get('name'),
                 "category": label.get('category', '病理学'),
                 "dataset_id": dataset_id
-            })
-        if records:
-            self.db.labels.insert_many(records)
+            }
+            docs.append(doc)
+            records.append(doc.copy())  # 拷贝一份用于返回，避免被 insert_many 原地添加 _id
+        if docs:
+            self.db.labels.insert_many(docs)
         return records
 
     def list(self, dataset_id: Optional[int]) -> List[Dict[str, Any]]:

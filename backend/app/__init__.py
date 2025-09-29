@@ -1,6 +1,5 @@
 from flask import Flask
 from flask_cors import CORS
-from app.routes import register_routes  # legacy (will be deprecated after phase migration)
 from app.api import register_all  # new blueprint aggregated registration
 from app.api.response import register_error_handlers
 from app.database_init import init_database
@@ -33,11 +32,21 @@ def create_app(static_folder=None):
         logging.warning(f"数据库初始化跳过: {e}")
     
     # 注册所有API路由（Phase1：并存旧 routes 与新拆分蓝图，确保兼容）
+    # 先注册旧路由，再注册新蓝图，确保新蓝图覆盖同名接口（避免旧版行为影响新实现）
+    from os import getenv
+    disable_legacy = getenv('DISABLE_LEGACY_ROUTES', '0') in ('1', 'true', 'True')
+    if not disable_legacy:
+        try:
+            from app.routes import register_routes  # legacy (will be deprecated after phase migration)
+            register_routes(app)
+        except Exception as e:
+            app.logger.warning(f"旧路由注册失败或不存在: {e}")
     try:
-        register_all(app)  # new modular blueprints
+        register_all(app)  # new modular blueprints will override same paths
     except Exception as e:
-        app.logger.warning(f"新蓝图注册失败，回退旧路由: {e}")
-    register_routes(app)  # keep legacy endpoints (duplicate definitions benign if identical)
+        app.logger.warning(f"新蓝图注册失败: {e}")
+        if disable_legacy:
+            app.logger.warning("已禁用旧路由，且新蓝图注册失败，系统可能缺少部分接口。请检查。")
     # 统一错误处理 (Phase 3)
     register_error_handlers(app)
     return app

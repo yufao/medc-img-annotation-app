@@ -80,13 +80,18 @@ class ImageService:
         image_ids = [l['image_id'] for l in links]
         imgs = list(self.db.images.find({"image_id": {"$in": image_ids}}, {"_id": 0}))
         annotations = list(self.db.annotations.find({'dataset_id': dataset_id, 'expert_id': expert_id}, {'_id': 0})) if expert_id else []
-        labels = list(self.db.labels.find({}, {"_id": 0, "label_id": 1, "label_name": 1}))
+        # 标签按数据集过滤，若该数据集没有专属标签，则回退到全局标签
+        labels = list(self.db.labels.find({"dataset_id": dataset_id}, {"_id": 0, "label_id": 1, "label_name": 1}))
+        if not labels:
+            labels = list(self.db.labels.find({"dataset_id": {"$exists": False}}, {"_id": 0, "label_id": 1, "label_name": 1})) or \
+                     list(self.db.labels.find({"dataset_id": None}, {"_id": 0, "label_id": 1, "label_name": 1}))
         labels_dict = {l['label_id']: l.get('label_name', '') for l in labels}
         result: List[Dict[str, Any]] = []
         for img in imgs:
             ann = next((a for a in annotations if a.get('image_id') == img.get('image_id')), None)
             if ann and ann.get('label_id'):
                 ann['label_name'] = labels_dict.get(ann['label_id'], '')
+                ann['label'] = ann.get('label_id')  # 兼容字段
             result.append({
                 "image_id": img.get('image_id'),
                 "filename": img.get('image_path', '').split('/')[-1],
