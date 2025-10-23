@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import api from '../../api/client';
 
 // 提取：进度环组件
@@ -56,6 +56,8 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   // 预取下一张（稳定随机顺序）：候选元数据 + 已预加载的图片 URL
   const [nextCandidate, setNextCandidate] = useState(null);
   const [nextImgSrc, setNextImgSrc] = useState(null);
+  // 导航历史：确保“上一张”回到用户实际浏览的上一项（而非服务端重新计算的上一项）
+  const historyRef = useRef({ stack: [], idx: -1 });
 
   // 加载标签 & 统计
   useEffect(() => {
@@ -116,6 +118,31 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
     } catch (e) { setTimeout(() => { if (dataset && user) fetchCounts(true); }, 3000); }
   };
 
+  const setCurrentImage = useCallback((meta, { push } = { push: false }) => {
+    if (!meta || !meta.image_id) return;
+    setImg({ image_id: meta.image_id, filename: meta.filename });
+    setImageId(meta.image_id);
+    if (meta.annotation) {
+      setLabel(String(meta.annotation.label));
+      setRemark(meta.annotation.tip || '');
+    } else {
+      setLabel('');
+      setRemark('');
+    }
+    resetView();
+    setIsImageSelected(false);
+    // 维护历史栈
+    const h = historyRef.current;
+    if (push) {
+      // 若当前不在栈尾，截断前进分支
+      if (h.idx < h.stack.length - 1) h.stack = h.stack.slice(0, h.idx + 1);
+      if (h.stack.length === 0 || String(h.stack[h.stack.length - 1]) !== String(meta.image_id)) {
+        h.stack.push(meta.image_id);
+      }
+      h.idx = h.stack.length - 1;
+    }
+  }, []);
+
   const fetchImage = async (id) => {
     setIsLoading(true); setError(null);
     try {
@@ -123,9 +150,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
         const { data } = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: true });
         const found = data.find(img => String(img.image_id) === String(id));
         if (found) {
-          setImg(found);
-          if (found.annotation) { setLabel(String(found.annotation.label)); setRemark(found.annotation.tip || ''); } else { setLabel(''); setRemark(''); }
-          setImageId(found.image_id); resetView(); setIsImageSelected(false);
+          setCurrentImage(found, { push: historyRef.current.idx < 0 });
           // 基于当前图片预取下一张
           prefetchNextStableRandom(found.image_id);
           return;
@@ -136,7 +161,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       const unAnnotatedList = (unAnnotatedResp.data || []).filter(x => !x.annotation);
       if (unAnnotatedList.length > 0) {
         const first = unAnnotatedList[0];
-        setImg(first); setLabel(''); setRemark(''); setImageId(first.image_id); resetView(); setIsImageSelected(false);
+        setCurrentImage(first, { push: true });
         // 直接用列表中的第二项作为“下一张”进行预取（稳定随机顺序）
         const second = unAnnotatedList[1];
         if (second) {
@@ -155,7 +180,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
             const nextImageResponse = await api.post('/next_image', { expert_id: user, dataset_id: dataset.id, role });
             if (nextImageResponse.data.image_id) {
               const meta = { image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename };
-              setImg(meta); setLabel(''); setRemark(''); setImageId(meta.image_id); resetView(); setIsImageSelected(false);
+              setCurrentImage(meta, { push: true });
               prefetchNextStableRandom(meta.image_id);
             } else { setImg({ completed: true }); setImageId(null); }
           }
@@ -175,8 +200,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       // 优先使用“已预取的下一张”（稳定随机序的下一项）
       let usedOptimistic = false;
       if (nextCandidate) {
-        setImg({ image_id: nextCandidate.image_id, filename: nextCandidate.filename });
-        setImageId(nextCandidate.image_id); resetView(); setIsImageSelected(false);
+        setCurrentImage({ image_id: nextCandidate.image_id, filename: nextCandidate.filename }, { push: true });
         usedOptimistic = true;
       }
       // 后台校验：请求 authoritative 的 next_image，若与预取不一致则切换为权威结果
@@ -185,7 +209,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
         if (nextImageResponse.data.image_id) {
           const authoritative = { image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename };
           if (!usedOptimistic || String(authoritative.image_id) !== String(nextCandidate?.image_id)) {
-            setImg(authoritative); setImageId(authoritative.image_id); resetView(); setIsImageSelected(false);
+            setCurrentImage(authoritative, { push: true });
           }
           // 基于新 current 继续预取后续项
           prefetchNextStableRandom(authoritative.image_id);
@@ -208,7 +232,26 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   };
 
   const handlePrev = async () => {
-    try { const { data } = await api.post('/prev_image', { dataset_id: dataset.id, image_id: img.image_id }); if (data.image_id) fetchImage(data.image_id); } catch (e) { console.error('获取上一张图片失败'); }
+    const h = historyRef.current;
+    if (h.idx > 0) {
+      h.idx -= 1;
+      const prevId = h.stack[h.idx];
+      // 从完整列表获取 meta（尽量避免再触发“稳定随机”序列逻辑）
+      try {
+        const { data } = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: true });
+        const found = (data || []).find(it => String(it.image_id) === String(prevId));
+        if (found) {
+          setCurrentImage(found, { push: false });
+          prefetchNextStableRandom(found.image_id);
+          return;
+        }
+      } catch { /* 忽略，回退兜底 */ }
+      // 兜底：仅用 id 更新（无 annotation）
+      setCurrentImage({ image_id: prevId, filename: img?.filename }, { push: false });
+      prefetchNextStableRandom(prevId);
+    } else {
+      console.warn('已到第一张');
+    }
   };
 
   // 交互：拖拽与缩放

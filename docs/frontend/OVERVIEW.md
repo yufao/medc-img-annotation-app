@@ -24,7 +24,8 @@ frontend/
 │   ├── router/
 │   ├── store/
 │   ├── styles/
-│   ├── App.jsx
+│   ├── router/
+│   │   └── Root.jsx            # 应用外壳与页面路由
 │   └── main.jsx
 ├── public/
 ├── vite.config.js
@@ -61,3 +62,10 @@ npm run dev
 
 - 数据集 `multi_select` 为 true 时，前端允许在标注面板中选择多个标签并批量提交
 - 初期以 UI 状态支持为主，后端接口将在 Phase 5 扩展
+
+## 升级说明：从 App.jsx 到 Root.jsx
+
+- 旧版将页面与逻辑集中在单文件 `src/App.jsx`，现已迁移到基于路由的外壳 `src/router/Root.jsx`
+- 标注核心逻辑位于 `components/annotation/Annotate.jsx`，图片选择位于 `components/annotation/ImageSelector.jsx`
+- 入口由 `src/main.jsx` 统一渲染 `Root`
+- 若按照旧文档查找 `App.jsx`，请改查上述位置；如需参考旧实现，请查看 Git 历史中的 `src/App.jsx`

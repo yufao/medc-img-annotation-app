@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import Login from '../components/Login';
 import DatasetSelect from '../components/DatasetSelect';
@@ -23,12 +23,26 @@ function LayoutAnnotate() {
     user: s.user, role: s.role, dataset: s.dataset, setDataset: s.setDataset
   }));
   const navigate = useNavigate();
+  const [useFullLogo, setUseFullLogo] = useState(true);
   if (!dataset) return <Navigate to="/datasets" replace />;
   return (
     <div className="app-container">
       <div className="page-logos">
-        <div className="logo-left"><img src="/实验室LOGO.png" alt="实验室LOGO" className="page-logo" /></div>
-        <div className="logo-right"><img src="/JNU-LOGO.jpg" alt="学校LOGO" className="page-logo" /></div>
+        {useFullLogo ? (
+          <div className="logo-full">
+            <img
+              src="/logo-full.png"
+              alt="系统Logo"
+              className="page-logo"
+              onError={() => setUseFullLogo(false)}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="logo-left"><img src="/实验室LOGO.png" alt="实验室LOGO" className="page-logo" /></div>
+            <div className="logo-right"><img src="/JNU-LOGO.jpg" alt="学校LOGO" className="page-logo" /></div>
+          </>
+        )}
       </div>
       <div className="main-bg">
         <div className="top-bar">

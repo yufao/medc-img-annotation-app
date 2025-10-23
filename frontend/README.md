@@ -23,7 +23,8 @@ npm run dev
 
 ## 开发说明
 
-- 核心代码在 `src/App.jsx`
+- 路由与应用外壳在 `src/router/Root.jsx`
+- 标注与图片选择等业务组件位于 `src/components/**`
 - Vite 配置代理到后端 5000 端口
 - 使用 React Hooks 管理状态
 
@@ -31,7 +32,7 @@ npm run dev
 		4) 仍无则显示“已完成”
 - 提交后：重复上述逻辑，避免误判
 
-2025-08-16：修复“仍有未标注却提示完成”的问题，具体实现见 `App.jsx` 中 `fetchImage` 与 `handleSubmit`。
+2025-08-16：修复“仍有未标注却提示完成”的问题，具体实现见 `components/annotation/Annotate.jsx` 中 `fetchImage` 与 `handleSubmit`。
 
 ## 故障排查
 
@@ -41,5 +42,23 @@ npm run dev
 ## 主要文件
 
 - `index.html`：主模板
-- `src/main.jsx`：入口挂载
-- `src/App.jsx`：页面、数据流与标注逻辑（已补充详细注释）
+- `src/main.jsx`：入口挂载（渲染 `router/Root.jsx`）
+- `src/router/Root.jsx`：路由与页面布局
+- `src/components/annotation/Annotate.jsx`：标注主面板（取图/提交/跳转）
+- `src/components/annotation/ImageSelector.jsx`：选择/修改标注
+
+## 升级说明：从 App.jsx 迁移到 Root.jsx
+
+自 2025-10 起，前端从“单文件 `App.jsx` 内联多页面”切换为“基于 `react-router` 的路由外壳 `src/router/Root.jsx` + 业务组件分层”的结构：
+
+- 入口不再是 `src/App.jsx`，而是 `src/main.jsx` 渲染的 `src/router/Root.jsx`
+- 页面/业务逻辑拆分到 `src/components/**`，例如标注主面板在 `components/annotation/Annotate.jsx`
+- 旧文件 `src/App.jsx` 已移除；文档描述全部指向新结构
+
+你的代码适配：
+- 如需修改标注行为（取图、提交流程、上一张回退等），编辑 `components/annotation/Annotate.jsx`
+- 如需调整“选择图片/修改标注”的排序或分页，编辑 `components/annotation/ImageSelector.jsx`
+- 如需改导航或页眉 Logo，编辑 `router/Root.jsx`
+
+回滚/对比：
+- 如必须参考旧实现，可从仓库历史提交中查看已删除的 `src/App.jsx` 版本（git 历史）

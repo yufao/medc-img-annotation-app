@@ -151,7 +151,7 @@ medc-img-annotation-app/
 
 ## 🧭 前端标注流程说明（关键逻辑）
 
-- 入口组件：`frontend/src/App.jsx` 的 `Annotate`
+- 入口组件：`frontend/src/router/Root.jsx`（页面容器）；标注主组件：`frontend/src/components/annotation/Annotate.jsx`
 - 获取图片：
   1) 若从图片选择器带回 image_id，则精确加载该图及其标注
   2) 否则：

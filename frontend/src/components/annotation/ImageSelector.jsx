@@ -25,7 +25,24 @@ export default function ImageSelector({ user, dataset, role, onSelect, onBack, p
         pageSize,
         include_all: true
       });
-      if (reset) setImages(data); else setImages(prev => [...prev, ...data]);
+      // 全量合并后排序：已标注在前，未标注在后；同组按 image_id 升序
+      const comp = (a, b) => {
+        const aAnn = !!a.annotation;
+        const bAnn = !!b.annotation;
+        if (aAnn !== bAnn) return aAnn ? -1 : 1; // 已标注优先
+        return (a.image_id || 0) - (b.image_id || 0);
+      };
+
+      setImages(prev => {
+        const incoming = Array.isArray(data) ? data : [];
+        const merged = reset ? incoming.slice() : [...prev, ...incoming];
+        // 去重（按 image_id），避免分页重复项
+        const map = new Map();
+        for (const it of merged) {
+          if (it && it.image_id != null) map.set(String(it.image_id), it);
+        }
+        return Array.from(map.values()).sort(comp);
+      });
       setHasMore(data.length === pageSize);
     } catch (error) {
       console.error('加载图片失败:', error);
