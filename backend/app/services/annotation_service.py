@@ -123,14 +123,67 @@ class AnnotationService:
         return result[start:end]
 
     # ------------- Previous image -------------
-    def prev_image(self, dataset_id: int, current_image_id: int) -> Dict[str, Any]:
-        """获取上一张图片（按 image_id 升序的前一个）。
+    def prev_image(
+        self,
+        dataset_id: int,
+        current_image_id: Optional[int] = None,
+        *,
+        expert_id: Optional[str] = None,
+        by: str = 'sequential'
+    ) -> Dict[str, Any]:
+        """获取上一张图片。
+
+        模式：
+        - by == 'last_annotated' 且提供 expert_id：返回该专家最近一次标注的图片（若等于 current 则取更早一条）；
+        - 其他：按 image_id 升序的前一个（与旧行为一致）。
 
         返回：{image_id, filename}?；若不存在返回 {msg: 'no previous image'}。
         """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
-        # Prefer linking table ordering by image_id
+
+        if by == 'last_annotated' and expert_id:
+            # 从 annotations 中按 record_id(desc)/datetime(desc) 找最近一次
+            try:
+                cursor = self.db.annotations.find(
+                    {'dataset_id': ds_id, 'expert_id': expert_id},
+                    {'_id': 0, 'image_id': 1, 'record_id': 1, 'datetime': 1}
+                ).sort([
+                    ('record_id', -1),
+                    ('datetime', -1)
+                ])
+                anns = list(cursor)
+            except Exception:
+                anns = list(self.db.annotations.find(
+                    {'dataset_id': ds_id, 'expert_id': expert_id},
+                    {'_id': 0, 'image_id': 1, 'record_id': 1, 'datetime': 1}
+                ))
+                # fallback python 排序
+                anns.sort(key=lambda a: (a.get('record_id') or 0, a.get('datetime') or ''), reverse=True)
+
+            if not anns:
+                return {"msg": "no previous image"}
+
+            pick = anns[0]
+            if current_image_id is not None and pick.get('image_id') == current_image_id:
+                if len(anns) > 1:
+                    pick = anns[1]
+                else:
+                    return {"msg": "no previous image"}
+
+            image_doc = self.db.images.find_one({'image_id': pick.get('image_id')}, {'_id': 0, 'image_id': 1, 'image_path': 1})
+            if image_doc:
+                return {
+                    'image_id': image_doc.get('image_id'),
+                    'filename': self._filename_from_path(image_doc.get('image_path', ''))
+                }
+            # 若找不到图片文档，仍返回 image_id，filename 置空
+            return {
+                'image_id': pick.get('image_id'),
+                'filename': ''
+            }
+
+        # 默认顺序：按 image_id 升序的前一个
         links = list(self.db.image_datasets.find({"dataset_id": ds_id}, {"_id": 0, "image_id": 1}))
         if not links:
             # fallback memory
@@ -146,10 +199,10 @@ class AnnotationService:
                 prev_img = imgs_sorted[i - 1]
                 break
         if prev_img:
-            # augment filename if missing
-            if 'filename' not in prev_img:
-                prev_img['filename'] = self._filename_from_path(prev_img.get('image_path', ''))
-            return prev_img
+            return {
+                'image_id': prev_img.get('image_id'),
+                'filename': self._filename_from_path(prev_img.get('image_path', ''))
+            }
         return {"msg": "no previous image"}
 
     # ------------- Next image (random unannotated) -------------

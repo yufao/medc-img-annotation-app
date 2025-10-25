@@ -232,25 +232,25 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   };
 
   const handlePrev = async () => {
-    const h = historyRef.current;
-    if (h.idx > 0) {
-      h.idx -= 1;
-      const prevId = h.stack[h.idx];
-      // 从完整列表获取 meta（尽量避免再触发“稳定随机”序列逻辑）
-      try {
-        const { data } = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: true });
-        const found = (data || []).find(it => String(it.image_id) === String(prevId));
-        if (found) {
-          setCurrentImage(found, { push: false });
-          prefetchNextStableRandom(found.image_id);
-          return;
-        }
-      } catch { /* 忽略，回退兜底 */ }
-      // 兜底：仅用 id 更新（无 annotation）
-      setCurrentImage({ image_id: prevId, filename: img?.filename }, { push: false });
-      prefetchNextStableRandom(prevId);
-    } else {
-      console.warn('已到第一张');
+    // 使用服务端“最近一次标注”的语义获取上一张，避免仅按浏览历史或顺序回退
+    if (!dataset || !user) return;
+    setIsLoading(true); setError(null);
+    try {
+      const body = { dataset_id: dataset.id, expert_id: user, role, by: 'last_annotated' };
+      if (img?.image_id) body.current_image_id = img.image_id; // 避免返回当前同一张
+      const resp = await api.post('/prev_image', body);
+      const data = resp.data || {};
+      if (data.image_id) {
+        const meta = { image_id: data.image_id, filename: data.filename };
+        setCurrentImage(meta, { push: true });
+        prefetchNextStableRandom(meta.image_id);
+      } else {
+        setError('没有上一张可回退');
+      }
+    } catch (e) {
+      setError('获取上一张失败，请重试');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -272,7 +272,19 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       <h2>标注图片: ID #{img.image_id}</h2>
       <div className="image-container" onClick={e => { if (e.target === e.currentTarget) setIsImageSelected(false); }}>
         <div className={`image-viewer ${isImageSelected ? 'selected' : ''}`} onMouseDown={onImageMouseDown} onMouseMove={onImageMouseMove} onMouseUp={onImageMouseUp}>
-          <img src={`/static/img/${img.filename}`} alt={`图片ID: ${img.image_id}`} loading="lazy" draggable={false} style={{ transform: `scale(${imageScale}) translate(${imageOffset.x / imageScale}px, ${imageOffset.y / imageScale}px)`, cursor: imageScale > 1 ? (isDragging ? 'grabbing' : 'grab') : (isImageSelected ? 'zoom-in' : 'pointer'), transition: isDragging ? 'none' : 'transform 0.1s ease', userSelect: 'none' }} />
+          <img
+            key={`${img.image_id}-${img.filename || ''}`}
+            src={`/static/img/${img.filename}?v=${img.image_id}`}
+            alt={`图片ID: ${img.image_id}`}
+            loading="lazy"
+            draggable={false}
+            style={{
+              transform: `scale(${imageScale}) translate(${imageOffset.x / imageScale}px, ${imageOffset.y / imageScale}px)`,
+              cursor: imageScale > 1 ? (isDragging ? 'grabbing' : 'grab') : (isImageSelected ? 'zoom-in' : 'pointer'),
+              transition: isDragging ? 'none' : 'transform 0.1s ease',
+              userSelect: 'none'
+            }}
+          />
         </div>
         <div className="image-controls">
           <div className="control-buttons">

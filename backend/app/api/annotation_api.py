@@ -30,9 +30,11 @@ def images_with_annotations():
 def prev_image():
     data = request.json or {}
     ds_id = data.get('dataset_id')
-    curr_image_id = data.get('image_id')
+    curr_image_id = data.get('image_id') or data.get('current_image_id')
+    expert_id = data.get('expert_id')
+    by = data.get('by', 'last_annotated')
     try:
-        result = annotation_service.prev_image(ds_id, curr_image_id)
+        result = annotation_service.prev_image(ds_id, curr_image_id, expert_id=expert_id, by=by)
         return jsonify(result)
     except RuntimeError as re:
         return jsonify({"msg": "error", "error": str(re)})
