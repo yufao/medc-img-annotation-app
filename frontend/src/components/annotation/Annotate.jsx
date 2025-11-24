@@ -38,7 +38,9 @@ function ProgressStats({ annotatedCount, totalCount }) {
 export default function Annotate({ user, dataset, role, onDone, imageIdInit, onSelectMode }) {
   const [img, setImg] = useState(null);
   const [labels, setLabels] = useState([]);
+  // 单选模式使用 label；多选模式使用 selectedLabels
   const [label, setLabel] = useState('');
+  const [selectedLabels, setSelectedLabels] = useState([]);
   const [remark, setRemark] = useState('');
   const [imageId, setImageId] = useState(imageIdInit);
   const [annotatedCount, setAnnotatedCount] = useState(0);
@@ -123,10 +125,25 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
     setImg({ image_id: meta.image_id, filename: meta.filename });
     setImageId(meta.image_id);
     if (meta.annotation) {
-      setLabel(String(meta.annotation.label));
+      // 兼容：多标签使用 annotation.label_ids 或单标签 annotation.label
+      if (dataset?.multi_select) {
+        if (meta.annotation.label_ids) {
+          setSelectedLabels(meta.annotation.label_ids.map(id => String(id)));
+        } else if (meta.annotation.label) {
+          // 兼容旧数据：多选模式下若只有单标签字段，则将其作为选中项
+          setSelectedLabels([String(meta.annotation.label)]);
+        } else {
+          setSelectedLabels([]);
+        }
+        setLabel('');
+      } else {
+        setLabel(String(meta.annotation.label));
+        setSelectedLabels([]);
+      }
       setRemark(meta.annotation.tip || '');
     } else {
       setLabel('');
+      setSelectedLabels([]);
       setRemark('');
     }
     resetView();
@@ -141,7 +158,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       }
       h.idx = h.stack.length - 1;
     }
-  }, []);
+  }, [dataset]);
 
   const fetchImage = async (id) => {
     setIsLoading(true); setError(null);
@@ -192,11 +209,19 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   const resetView = () => { setImageScale(1); setImageOffset({ x: 0, y: 0 }); };
 
   const handleSubmit = async () => {
-    if (!label) { setError('请选择标签'); return; }
+    const isMulti = dataset?.multi_select;
+    if ((!isMulti && !label) || (isMulti && selectedLabels.length === 0)) { setError('请选择标签'); return; }
     if (submitDisabled) return; setSubmitDisabled(true); setError(null);
     try {
-      await api.post('/annotate', { expert_id: user, dataset_id: dataset.id, image_id: img.image_id, label, tip: remark });
+      const payload = { expert_id: user, dataset_id: dataset.id, image_id: img.image_id, tip: remark };
+      if (isMulti) {
+        payload.label_ids = selectedLabels.map(x => parseInt(x));
+      } else {
+        payload.label = label;
+      }
+      await api.post('/annotate', payload);
       setLabel(''); setRemark('');
+      setSelectedLabels([]);
       // 优先使用“已预取的下一张”（稳定随机序的下一项）
       let usedOptimistic = false;
       if (nextCandidate) {
@@ -297,13 +322,36 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
         <div className="img-id">图片 ID: #{img.image_id}</div>
       </div>
       <div className="form-row label-row">
-        <label>标签：</label>
+        <label>标签{dataset?.multi_select ? '（多选）' : ''}：</label>
         <div className="label-btn-group">
           {labels.length === 0 ? (<div style={{color: '#999', fontSize: '14px', padding: '10px'}}>{error || '正在加载标签...'}</div>) : labels.map(l => {
-            const isSelected = String(label) === String(l.label_id || l.id);
-            return <button key={l.label_id || l.id} type="button" className={"label-btn" + (isSelected ? " selected" : "")} onClick={() => { setLabel(String(l.label_id || l.id)); setError(null); }}>{l.name}</button>;
+            const lid = String(l.label_id || l.id);
+            const isMulti = dataset?.multi_select;
+            const isSelected = isMulti ? selectedLabels.includes(lid) : String(label) === lid;
+            return (
+              <button 
+                key={lid} 
+                type="button" 
+                className={"label-btn" + (isSelected ? " selected" : "")} 
+                onClick={() => { 
+                  setError(null);
+                  if (isMulti) {
+                    if (selectedLabels.includes(lid)) {
+                      setSelectedLabels(selectedLabels.filter(x => x !== lid));
+                    } else {
+                      setSelectedLabels([...selectedLabels, lid]);
+                    }
+                  } else {
+                    setLabel(lid); 
+                  }
+                }}
+              >
+                {l.name}
+              </button>
+            );
           })}
         </div>
+        {dataset?.multi_select && <div className="hint-text" style={{marginTop:4}}>已选：{selectedLabels.length ? selectedLabels.length : 0} 个</div>}
       </div>
       <div className="form-row">
         <label>备注：</label>
@@ -312,10 +360,10 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       <button
         className={"btn" + (submitDisabled ? " pending" : "")}
         onClick={handleSubmit}
-        disabled={!label && !submitDisabled}
         style={{ pointerEvents: submitDisabled ? 'none' : 'auto' }}
+        disabled={(!dataset?.multi_select && !label && !submitDisabled) || (dataset?.multi_select && selectedLabels.length === 0)}
       >
-        {submitDisabled ? '提交中...' : '提交并下一张'}
+        {submitDisabled ? '提交中...' : (dataset?.multi_select ? '提交并下一张(多标签)' : '提交并下一张')}
       </button>
       <button className="btn" onClick={handlePrev} style={{ marginLeft: 12 }}>上一张</button>
     </div>
