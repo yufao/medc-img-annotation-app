@@ -5,9 +5,9 @@
 ## 🎯 项目概述
 
 - **多角色管理**：管理员、医生、学生三种角色
-- **标注流程**：获取下一张待标注图片、选择标签、备注并提交、自动跳到下一张
-- **数据集管理**：数据集、标签、图片上传与进度统计
-- **数据导出**：按数据集和用户筛选导出 Excel
+- **标注流程**：获取下一张待标注图片、选择标签（支持单选/多选）、备注并提交、自动跳到下一张
+- **数据集管理**：数据集（支持多标签配置）、标签、图片上传与进度统计
+- **数据导出**：按数据集和用户筛选导出 Excel（多标签自动聚合）
 
 ## 🚀 快速启动
 
@@ -146,6 +146,7 @@ medc-img-annotation-app/
 - 管理数据集
   - POST `/api/admin/datasets`
   - DELETE `/api/admin/datasets/{id}`
+  - DELETE `/api/admin/datasets/{id}/annotations`（清空数据集标注记录）
   - POST `/api/admin/datasets/{id}/images`（上传图片）
   - POST `/api/admin/datasets/{id}/recount`（重算图片数）
 
@@ -186,6 +187,7 @@ JWT_SECRET_KEY=changeme
 ## � 变更日志（摘要）
 
 - 2025-08-16：修复前端取图逻辑，优先未标注 + 统计/next_image 双重校验；补充文档与注释
+- 2025-11-24：新增多标签任务支持（数据集配置 multi_select）；新增清空数据集标注功能；优化导出格式
 
 ---
 

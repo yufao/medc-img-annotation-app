@@ -70,3 +70,19 @@ def recount_dataset_images(dataset_id):
         return fail("数据库连接不可用", 500)
     count = dataset_service.recount_images(dataset_id)
     return success({"dataset_id": dataset_id, "image_count": count})
+
+@bp.route('/api/admin/datasets/<int:dataset_id>/annotations', methods=['DELETE'])
+def clear_dataset_annotations(dataset_id):
+    role = request.args.get('role') or (request.json or {}).get('role')
+    if role != 'admin':
+        return fail("权限不足", 403, code='forbidden')
+    if not USE_DATABASE:
+        return fail("数据库连接不可用", 500)
+    try:
+        cleared = dataset_service.clear_annotations(dataset_id)
+        return success({"dataset_id": dataset_id, "cleared": cleared})
+    except RuntimeError as re:
+        return fail(str(re), 500)
+    except Exception as e:
+        current_app.logger.error(f"清空标注失败: {e}")
+        return fail("清空标注发生错误", 500)

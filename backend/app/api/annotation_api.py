@@ -62,10 +62,11 @@ def annotate():
     ds_id = data.get('dataset_id')
     image_id = data.get('image_id')
     expert_id = data.get('expert_id')
-    label = data.get('label')
+    label = data.get('label')  # 单标签兼容
+    label_ids = data.get('label_ids')  # 多标签（新）
     tip = data.get('tip', '')
     try:
-        result = annotation_service.save_annotation(ds_id, image_id, expert_id, label, tip)
+        result = annotation_service.save_annotation(ds_id, image_id, expert_id, label, tip, label_ids=label_ids)
         return jsonify(result)
     except RuntimeError as re:
         return jsonify({"msg": "error", "error": str(re)})
@@ -80,9 +81,10 @@ def update_annotation():
     image_id = data.get('image_id')
     expert_id = data.get('expert_id')
     label = data.get('label')
+    label_ids = data.get('label_ids')
     tip = data.get('tip', '')
     try:
-        result = annotation_service.update_annotation_fields(ds_id, image_id, expert_id, label, tip)
+        result = annotation_service.update_annotation_fields(ds_id, image_id, expert_id, label, tip, label_ids=label_ids)
         return jsonify(result)
     except RuntimeError as re:
         return jsonify({"msg": "error", "error": str(re)})

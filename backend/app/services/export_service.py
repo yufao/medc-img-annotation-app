@@ -48,9 +48,21 @@ class ExportService:
                                       list(self.db.labels.find({"dataset_id": None}, {"_id": 0}))
                     labels_dict = {l.get('label_id'): l.get('label_name', '') for l in labels_list}
                     for item in annotations_data:
-                        item['label_name'] = labels_dict.get(item.get('label_id'), '')
+                        # 多标签支持：若存在 label_ids，生成逗号分隔的名称；否则保持单标签
+                        if 'label_ids' in item and isinstance(item['label_ids'], list) and item['label_ids']:
+                            names = [labels_dict.get(lid, '') for lid in item['label_ids']]
+                            item['label_name'] = ','.join([n for n in names if n])
+                            # 为兼容旧字段，label_id 保留首个
+                            if 'label_id' not in item and item['label_ids']:
+                                item['label_id'] = item['label_ids'][0]
+                        else:
+                            item['label_name'] = labels_dict.get(item.get('label_id'), '')
                     adf = pd.DataFrame(annotations_data)
-                    col_order = ['dataset_id','record_id','image_id','expert_id','label_id','label_name','tip','datetime']
+                    # 增加 label_ids 字段（多标签模式下的原始列表），导出时保持逗号分隔在 label_name 中
+                    if 'label_ids' in adf.columns:
+                        # 若需要可保留原列表列；当前只展示方便溯源
+                        pass
+                    col_order = ['dataset_id','record_id','image_id','expert_id','label_id','label_ids','label_name','tip','datetime']
                     adf = adf.reindex(columns=[c for c in col_order if c in adf.columns])
                     if 'dataset_id' in adf.columns:
                         adf = adf.sort_values(['dataset_id','record_id'])

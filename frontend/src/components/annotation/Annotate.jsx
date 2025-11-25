@@ -58,6 +58,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   // 预取下一张（稳定随机顺序）：候选元数据 + 已预加载的图片 URL
   const [nextCandidate, setNextCandidate] = useState(null);
   const [nextImgSrc, setNextImgSrc] = useState(null);
+  const [reviewMode, setReviewMode] = useState(false);
   // 导航历史：确保“上一张”回到用户实际浏览的上一项（而非服务端重新计算的上一项）
   const historyRef = useRef({ stack: [], idx: -1 });
 
@@ -80,8 +81,12 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   const prefetchNextStableRandom = useCallback(async (currentImageId) => {
     if (!dataset || !user) return;
     try {
-      const resp = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: false });
-      const list = (resp.data || []).filter(x => !x.annotation);
+      const includeAll = reviewMode;
+      const resp = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: includeAll });
+      let list = resp.data || [];
+      if (!includeAll) {
+        list = list.filter(x => !x.annotation);
+      }
       if (!list.length) { setNextCandidate(null); setNextImgSrc(null); return; }
       // 在未标注序列中找到当前的索引；通常 current 在未标注列表的第 0 位
       const idx = list.findIndex(x => String(x.image_id) === String(currentImageId));
@@ -104,7 +109,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       // 忽略预取失败，不影响主流程
       setNextCandidate(null); setNextImgSrc(null);
     }
-  }, [dataset, user, role]);
+  }, [dataset, user, role, reviewMode]);
 
   const fetchCounts = async (forceRefresh = false) => {
     if (!dataset || !user) return;
@@ -230,18 +235,30 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
       }
       // 后台校验：请求 authoritative 的 next_image，若与预取不一致则切换为权威结果
       try {
-        const nextImageResponse = await api.post('/next_image', { expert_id: user, dataset_id: dataset.id, role });
-        if (nextImageResponse.data.image_id) {
-          const authoritative = { image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename };
-          if (!usedOptimistic || String(authoritative.image_id) !== String(nextCandidate?.image_id)) {
-            setCurrentImage(authoritative, { push: true });
+        let currentIdForPrefetch = null;
+        if (reviewMode) {
+          if (usedOptimistic) {
+            currentIdForPrefetch = nextCandidate.image_id;
+          } else {
+            setImg({ completed: true }); setImageId(null);
+            setNextCandidate(null); setNextImgSrc(null);
           }
-          // 基于新 current 继续预取后续项
-          prefetchNextStableRandom(authoritative.image_id);
         } else {
-          // 没有下一张
-          if (!usedOptimistic) { setImg({ completed: true }); setImageId(null); }
-          setNextCandidate(null); setNextImgSrc(null);
+          const nextImageResponse = await api.post('/next_image', { expert_id: user, dataset_id: dataset.id, role });
+          if (nextImageResponse.data.image_id) {
+            const authoritative = { image_id: nextImageResponse.data.image_id, filename: nextImageResponse.data.filename };
+            if (!usedOptimistic || String(authoritative.image_id) !== String(nextCandidate?.image_id)) {
+              setCurrentImage(authoritative, { push: true });
+            }
+            currentIdForPrefetch = authoritative.image_id;
+          } else {
+            // 没有下一张
+            if (!usedOptimistic) { setImg({ completed: true }); setImageId(null); }
+            setNextCandidate(null); setNextImgSrc(null);
+          }
+        }
+        if (currentIdForPrefetch) {
+          prefetchNextStableRandom(currentIdForPrefetch);
         }
       } catch {
         // 如果 next_image 失败，但已使用本地预取，则继续基于本地 current 进行预取；否则回退到拉取未标注列表
@@ -279,6 +296,36 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
     }
   };
 
+  const handleContinueViewing = async () => {
+    setReviewMode(true);
+    setIsLoading(true);
+    try {
+      const { data } = await api.post('/images_with_annotations', { dataset_id: dataset.id, expert_id: user, role, include_all: true });
+      if (data && data.length > 0) {
+        const first = data[0];
+        setCurrentImage(first, { push: true });
+        
+        // 手动设置下一个候选
+        if (data.length > 1) {
+            const nextItem = data[1];
+            setNextCandidate({ image_id: nextItem.image_id, filename: nextItem.filename, image_path: nextItem.image_path });
+            const url = `/static/img/${nextItem.filename}`;
+            const imgEl = new Image();
+            imgEl.src = url;
+            imgEl.onload = () => setNextImgSrc(url);
+        } else {
+            setNextCandidate(null);
+        }
+      } else {
+        setError('该数据集没有图片');
+      }
+    } catch (e) {
+      setError('加载图片失败');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // 交互：拖拽与缩放
   const onImageMouseDown = e => { setIsImageSelected(true); if (imageScale > 1) { e.preventDefault(); setIsDragging(true); setDragStart({ x: e.clientX - imageOffset.x, y: e.clientY - imageOffset.y }); } };
   const onImageMouseMove = e => { if (isDragging && imageScale > 1) { e.preventDefault(); const newX = e.clientX - dragStart.x; const newY = e.clientY - dragStart.y; setImageOffset({ x: newX, y: newY }); } };
@@ -288,7 +335,7 @@ export default function Annotate({ user, dataset, role, onDone, imageIdInit, onS
   if (error) return <div className="error-box"><p className="error-message">❌ {error}</p><button className="btn" onClick={() => { setError(null); fetchImage(imageId); }}>重试</button><button className="btn secondary" onClick={onDone}>返回</button></div>;
   if (!img) return <div className="done-box">标注完成！<button className="btn" onClick={onDone}>返回</button></div>;
   if (img.completed) return (
-    <div className="completion-overlay"><div className="completion-card"><div className="completion-icon">🎉</div><h2 className="completion-title">恭喜！</h2><p className="completion-message">本数据集已全部标注完成</p><div className="completion-stats"><span className="completion-stat"><strong>{annotatedCount}</strong> 张图片已完成标注</span></div><div className="completion-actions"><button className="btn completion-btn secondary" onClick={() => onSelectMode && onSelectMode()}>继续查看本数据集</button><button className="btn completion-btn" onClick={onDone}>返回数据集选择</button></div></div></div>
+    <div className="completion-overlay"><div className="completion-card"><div className="completion-icon">🎉</div><h2 className="completion-title">恭喜！</h2><p className="completion-message">本数据集已全部标注完成</p><div className="completion-stats"><span className="completion-stat"><strong>{annotatedCount}</strong> 张图片已完成标注</span></div><div className="completion-actions"><button className="btn completion-btn secondary" onClick={handleContinueViewing}>继续查看本数据集</button><button className="btn completion-btn" onClick={onDone}>返回数据集选择</button></div></div></div>
   );
 
   return (

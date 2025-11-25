@@ -17,4 +17,10 @@ dependencies:
   - pillow
   - gunicorn
 
+  # ML (为 UNet 训练添加)
+  - scikit-learn
+  - pip:
+      - torch
+      - torchvision
+
   # Note: frontend uses Node.js via package.json (managed separately)

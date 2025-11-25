@@ -262,26 +262,37 @@ class AnnotationService:
         dataset_id: int,
         image_id: int,
         expert_id: str,
-        label_id: int,
-        tip: str = ''
+        label_id: Optional[int] = None,
+        tip: str = '',
+        label_ids: Optional[List[int]] = None
     ) -> Dict[str, Any]:
-        """保存/更新单条标注（单选模式）。
+        """保存/更新单条或多标签标注。
 
-        行为：
-        - upsert：同 (dataset_id, image_id, expert_id) 若已存在则更新，否则插入新纪录；
-        - 维护 record_id 自增序列；
-        - 写入 label_id 并兼容内存副本中的历史字段 label；
-        - 触发数据集统计缓存失效。
-        返回：{"msg": "saved", "expert_id": expert_id}
+        兼容策略：
+        - 若提供 label_ids(list) 且非空 -> 视为多标签；首个元素作为 label_id 兼容旧字段。
+        - 若仅提供 label_id -> 视为单标签，同时写入 label_ids=[label_id] 方便统一处理。
+        - Upsert 行为保持不变。
         """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
+        # 规范化标签集合
+        if label_ids and len(label_ids) > 0:
+            normalized_ids = [int(x) for x in label_ids if x is not None]
+            primary_label_id = normalized_ids[0] if normalized_ids else None
+        else:
+            primary_label_id = int(label_id) if label_id is not None else None
+            normalized_ids = [primary_label_id] if primary_label_id is not None else []
+
+        if not normalized_ids:
+            raise RuntimeError("缺少标签: 至少需要一个标签")
+
         existing = self.db.annotations.find_one({'dataset_id': ds_id, 'image_id': image_id, 'expert_id': expert_id})
         annotation_data = {
             'dataset_id': ds_id,
             'image_id': image_id,
             'expert_id': expert_id,
-            'label_id': label_id,
+            'label_id': primary_label_id,          # 旧字段保留
+            'label_ids': normalized_ids,           # 新字段（多标签支持）
             'datetime': datetime.now().isoformat(),
             'tip': tip
         }
@@ -292,15 +303,15 @@ class AnnotationService:
             next_record_id = get_next_annotation_id(self.db)
             annotation_data['record_id'] = next_record_id
             self.db.annotations.insert_one(annotation_data)
-        # memory sync
+        # memory sync（保留旧结构兼容）
         self.ANNOTATIONS[:] = [a for a in self.ANNOTATIONS if not (a.get('dataset_id') == ds_id and a.get('image_id') == image_id and a.get('expert_id') == expert_id)]
-        memory_copy = annotation_data.copy(); memory_copy['label'] = label_id; self.ANNOTATIONS.append(memory_copy)
+        memory_copy = annotation_data.copy(); memory_copy['label'] = primary_label_id; self.ANNOTATIONS.append(memory_copy)
         # invalidate statistics cache for this (dataset, expert)
         try:
             dataset_service.invalidate_stats(ds_id, expert_id)
         except Exception:  # pragma: no cover - best effort
             pass
-        return {"msg": "saved", "expert_id": expert_id}
+        return {"msg": "saved", "expert_id": expert_id, "label_ids": normalized_ids}
 
     # ------------- Update annotation fields -------------
     def update_annotation_fields(
@@ -309,7 +320,8 @@ class AnnotationService:
         image_id: int,
         expert_id: str,
         label_id: Optional[int],
-        tip: str = ''
+        tip: str = '',
+        label_ids: Optional[List[int]] = None
     ) -> Dict[str, Any]:
         """更新已存在标注的字段（label_id/tip/datetime）。
 
@@ -317,11 +329,22 @@ class AnnotationService:
         """
         self.ensure_db()
         ds_id = self._normalize_dataset_id(dataset_id)
-        update_fields = {
-            'label_id': label_id,
-            'tip': tip,
-            'datetime': datetime.now().isoformat()
-        }
+        if label_ids and len(label_ids) > 0:
+            # 多标签模式更新：首个元素同步到旧字段
+            norm = [int(x) for x in label_ids if x is not None]
+            primary = norm[0] if norm else None
+            update_fields = {
+                'label_id': primary,
+                'label_ids': norm,
+                'tip': tip,
+                'datetime': datetime.now().isoformat()
+            }
+        else:
+            update_fields = {
+                'label_id': label_id,
+                'tip': tip,
+                'datetime': datetime.now().isoformat()
+            }
         result = self.db.annotations.update_one({'dataset_id': ds_id, 'image_id': image_id, 'expert_id': expert_id}, {'$set': update_fields})
         for ann in self.ANNOTATIONS:
             if ann.get('dataset_id') == ds_id and ann.get('image_id') == image_id and ann.get('expert_id') == expert_id:

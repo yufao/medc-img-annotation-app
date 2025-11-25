@@ -90,6 +90,15 @@ class DatasetService:
         self.invalidate_stats(dataset_id)
         return actual_count
 
+    def clear_annotations(self, dataset_id: int) -> int:
+        """删除指定数据集的全部标注记录。返回删除的条数。"""
+        self.ensure_db()
+        ds_id = int(dataset_id)
+        result = self.db.annotations.delete_many({'dataset_id': ds_id})
+        # 使统计缓存失效（所有专家）
+        self.invalidate_stats(ds_id, None)
+        return result.deleted_count
+
 dataset_service = DatasetService()
 
 __all__ = ["dataset_service", "DatasetService"]

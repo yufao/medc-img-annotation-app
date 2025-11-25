@@ -161,6 +161,7 @@ curl -sS http://127.0.0.1:8000/api/healthz
 - 打开 Network 面板：
   - 点击“上一张”，看到 `POST /api/prev_image`（请求体包含 `by:'last_annotated'` 与 `current_image_id`）；
   - 提交标注，看到 `/api/annotate` 与 `/api/next_image`；
+  - 若测试多标签数据集：确认 `POST /api/annotate` 载荷包含 `label_ids` 数组；
 - 图片显示与标题 ID 同步变化（前端 `<img>` 已带 `?v=image_id`）。
 
 ---
