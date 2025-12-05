@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Login from '../components/Login';
 import DatasetSelect from '../components/DatasetSelect';
 import DatasetManager from '../components/admin/DatasetManager';
@@ -19,12 +19,24 @@ function RequireAuth({ children }) {
 }
 
 function LayoutAnnotate() {
-  const { user, role, dataset, setDataset } = useAppStore(s => ({
-    user: s.user, role: s.role, dataset: s.dataset, setDataset: s.setDataset
+  const { user, role, dataset, setDataset, setUser } = useAppStore(s => ({
+    user: s.user, role: s.role, dataset: s.dataset, setDataset: s.setDataset, setUser: s.setUser
   }));
   const navigate = useNavigate();
   const [useFullLogo, setUseFullLogo] = useState(true);
   if (!dataset) return <Navigate to="/datasets" replace />;
+
+  const handleLogout = () => {
+    // 清除登录状态并返回登录界面
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    sessionStorage.clear();
+    setDataset(null);
+    setUser(null, null);
+    navigate('/login', { replace: true });
+
+  };
+
   return (
     <div className="app-container">
       <div className="page-logos">
@@ -48,22 +60,55 @@ function LayoutAnnotate() {
         <div className="top-bar">
           <span>用户: <b>{user}</b> ({role})</span>
           <span className="app-title">医学图像标注系统</span>
-          <button className="btn logout" onClick={() => { setDataset(null); navigate('/datasets'); }}>返回</button>
+          <div className="top-actions">
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => navigate('/images')}
+              title="选择样本修改标注（不常用）"
+            >
+              选择图片/修改标注
+            </button>
+            <button
+              className="btn"
+              onClick={handleLogout}
+              title="登出并返回登录"
+            >
+              登出
+            </button>
+            <button
+              className="btn logout"
+              onClick={() => { setDataset(null); navigate('/datasets'); }}
+              title="返回选择数据集"
+            >
+              返回
+            </button>
+          </div>
         </div>
         <Annotate user={user} dataset={dataset} role={role} onDone={() => { setDataset(null); navigate('/datasets'); }} />
+        
         <div className="export-bar">
           <ExportButton dataset={dataset} user={user} role={role} />
-          <button className="btn" onClick={() => navigate('/images')}>选择图片/修改标注</button>
+          {/* 选择图片按钮已移至顶部并弱化，此处不再重复 */}
         </div>
+        
       </div>
     </div>
   );
 }
 
 function ImagesPage() {
-  const { dataset, user, role } = useAppStore(s => ({ dataset: s.dataset, user: s.user, role: s.role }));
+  const { dataset, user, role, setDataset, setUser } = useAppStore(s => ({ dataset: s.dataset, user: s.user, role: s.role, setDataset: s.setDataset, setUser: s.setUser }));
   const navigate = useNavigate();
   if (!dataset) return <Navigate to="/datasets" replace />;
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    sessionStorage.clear();
+    setDataset(null);
+    setUser(null, null);
+    navigate('/login', { replace: true });
+  };
   return (
     <div className="select-bg">
       <ImageSelector user={user} dataset={dataset} role={role} onSelect={() => navigate('/annotate')} onBack={() => navigate('/annotate')} />
@@ -72,12 +117,22 @@ function ImagesPage() {
 }
 
 function DatasetsPage() {
-  const { role } = useAppStore();
-  const setDataset = useAppStore(s => s.setDataset);
+  const { role, setDataset, setUser } = useAppStore(s => ({ role: s.role, setDataset: s.setDataset, setUser: s.setUser }));
   const navigate = useNavigate();
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    sessionStorage.clear();
+    setDataset(null);
+    setUser(null, null);
+    navigate('/login', { replace: true });
+  };
   return (
     <div className="select-bg">
-      <DatasetSelect onSelect={(ds) => { setDataset(ds); navigate('/annotate'); }} role={role} onAdmin={() => role === 'admin' && navigate('/admin/datasets')} />
+      <div className="card-with-actions">
+        <button className="btn card-action-top-right" onClick={handleLogout} title="登出并返回登录">登出</button>
+        <DatasetSelect onSelect={(ds) => { setDataset(ds); navigate('/annotate'); }} role={role} onAdmin={() => role === 'admin' && navigate('/admin/datasets')} />
+      </div>
     </div>
   );
 }

@@ -64,7 +64,7 @@ export default function ImageSelector({ user, dataset, role, onSelect, onBack, p
   return (
     <div className="dataset-card">
       <div className="selector-header">
-        <h2>选择图片进行标注/修改</h2>
+        <h2>选择图片</h2>
         <button className="btn back-btn" onClick={onBack}>返回</button>
       </div>
       <div style={{maxHeight:500,overflowY:'auto'}}>

@@ -47,6 +47,15 @@ npm run dev
 - `src/components/annotation/Annotate.jsx`：标注主面板（取图/提交/跳转）
 - `src/components/annotation/ImageSelector.jsx`：选择/修改标注
 
+## 变更记录（前端增量）
+
+- 2025-12-05：UI 调整
+	- 将“选择图片/修改标注”按钮从标注页底部迁移到顶部工具区，并弱化为小号幽灵样式，减少干扰
+	- 在“选择数据集”页面与“标注主界面”页眉右侧新增“登出”按钮，清理会话后返回登录页
+	- 样式新增：`top-actions`、`page-tools` 容器与 `btn-xs`/`btn-sm`/`btn-ghost`/`btn-outline` 辅助类
+	- “选择图片”页面不再显示“登出/返回”按钮，保持列表操作专注
+	- “选择数据集”页面的“登出”按钮置于白色卡片右上角，增强一致性与可达性
+
 ## 升级说明：从 App.jsx 迁移到 Root.jsx
 
 自 2025-10 起，前端从“单文件 `App.jsx` 内联多页面”切换为“基于 `react-router` 的路由外壳 `src/router/Root.jsx` + 业务组件分层”的结构：
